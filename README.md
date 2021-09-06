@@ -1,7 +1,8 @@
 # Few-shot and 2-hop Knowledge Probing for Pretrained Language Models
 
+This repo contains two major parts: (1) An extention dataset for 2-hop relation probing based on LAMA: TREx_multihop. (Sorry that the name "multihop" in the code could be misleading, it only contains 2-hop relations.) (2) Few-shot training.
+
 This code is based on LAMA(https://github.com/facebookresearch/LAMA).
-It contains two major parts: (1) An extention dataset for 2-hop relation probing: TREx_multihop. (Sorry that the name "multihop" in the code could be misleading, it only contains 2-hop relations.) (2) Few-shot training.
 
 ## Preparation
 
