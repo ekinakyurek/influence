@@ -69,7 +69,6 @@ src/
 .idea
 */.mypy_cache
 LAMA-Internal/
-data/
 last_results.csv
 output/
 

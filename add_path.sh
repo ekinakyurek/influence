@@ -1,1 +1,1 @@
-export PYTHONPATH=/home/gridsan/tianxing/projects/lama_202101/LAMA:$PYTHONPATH
+export PYTHONPATH=/home/gridsan/tianxing/projects/lama_open/LAMA:$PYTHONPATH
