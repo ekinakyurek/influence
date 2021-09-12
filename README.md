@@ -1,5 +1,7 @@
 # Few-shot and 2-hop Knowledge Probing for Pretrained Language Models
 
+This repo contains code for https://arxiv.org/abs/2109.02772 .
+
 This repo contains two major parts: (1) An extention dataset for 2-hop relation probing based on LAMA: TREx_multihop. (Sorry that the name "multihop" in the code could be misleading, it only contains 2-hop relations.) (2) Few-shot training.
 
 This code is based on LAMA(https://github.com/facebookresearch/LAMA).
@@ -71,4 +73,18 @@ For BitFit, we tune the learning rate with {0.01, 0.001, 0.0001}.
 BitFit can also be combined with OptiPrompt:
 ```
 python scripts/run_experiments.py --fewshot_ft 10 --dataset trex_multihop --fewshot_ft_param_all_lr_overwrite True --fewshot_ft_tuneseed_num 20 --relation_mode relvec --fewshot_ft_param_mode bitfit --learning_rate 0.01
+```
+
+## Citation
+
+If you use our code, we would really appreciate if you could cite our work!
+```
+@misc{he2021empirical,
+      title={An Empirical Study on Few-shot Knowledge Probing for Pretrained Language Models}, 
+      author={Tianxing He and Kyunghyun Cho and James Glass},
+      year={2021},
+      eprint={2109.02772},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI}
+}
 ```
