@@ -22,8 +22,10 @@ from collections import defaultdict
 import argparse, random, signal
 import numpy as np
 import torch
-from my_utils import setLogger 
+from my_utils import setLogger
 import logging
+import pdb
+import json
 #import extract_multi_hop
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s", datefmt="%m/%d/%Y %H:%M:%S", level=logging.INFO)
@@ -33,7 +35,7 @@ def set_seed(args):
     print('setting all seed to', args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    random.seed(args.seed) 
+    random.seed(args.seed)
 
 def exit_gracefully(signum, frame):
     # restore the original signal handler as otherwise evil things will happen
@@ -48,7 +50,7 @@ def exit_gracefully(signum, frame):
         print("Ok ok, quitting")
         sys.exit(1)
 
-    # restore the exit gracefully handler here    
+    # restore the exit gracefully handler here
     signal.signal(signal.SIGINT, exit_gracefully)
 
 parser = argparse.ArgumentParser(description='Process some integers.')
@@ -71,7 +73,7 @@ parser.add_argument('--relvec_initialize_mode', type = str, default = 'mean_embe
 parser.add_argument('--relvec_input_mode', type = str, default = 'direct') #direct or mlp
 parser.add_argument('--relvec_mlp_final_tanh', type = str2bool, default = True)
 parser.add_argument('--relvec_mlp_hidden_dim', type = int, default = 512)
-parser.add_argument('--relvec_mlp_layer_num', type = int, default = 1) 
+parser.add_argument('--relvec_mlp_layer_num', type = int, default = 1)
 parser.add_argument('--fewshot_ft', type=int, default = -1) #fewshot finetune
 parser.add_argument('--fewshot_ft_mode', type=str, default='each') #each (finetune for each relation) or gather (first gather examples from all relations, and just do training one time)
 parser.add_argument('--fewshot_ft_batch_mode', type = str, default = 'full_batch') #random or full_batch
@@ -163,11 +165,12 @@ pp = pprint.PrettyPrinter(width=80, compact=True)
 
 def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args):
     final_d = {}
+    pdb.set_trace()
     vocab_subset = load_vocab(args.common_vocab_filename) if args.use_common_vocab else None
-    
+
     #if args.fewshot_ft > 0 and args.fewshot_ft_mode == 'gather':
     #    fewshot_tr_gather, fewshot_dev_gather = [], []
-    
+
     if args.template_source == 'lpaqa':
         ld_num = 30
         if args.fewshot_ft > 0: ld_num = args.fewshot_ft + args.fewshot_ft_devnum
@@ -180,7 +183,7 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
         print('(load_and_prepare_data) relation idx:', r_count)
         #pp.pprint(relation)
         load_fn = "{}{}{}".format(data_path_pre, relation["relation"], data_path_post)
-        
+
         logger.info('loading %s', load_fn)
         # see if file exists
         try:
@@ -189,7 +192,7 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
             print("Relation {} excluded because the file does not exist.".format(relation["relation"]))
             print("Exception: {}".format(e))
             continue
-        
+
         #if args.lowercase:
         #    # lowercase all samples
         #    logger.info("lowercasing all samples...")
@@ -197,7 +200,7 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
         #else:
         #    # keep samples as they are
         all_samples = data
-            
+
         all_samples, ret_msg = filter_samples(model, data, vocab_subset, args.max_sentence_length, relation['template'])
         if len(all_samples) < max(args.filter_num, args.fewshot_ft + args.fewshot_ft_devnum):
             logger.info('this relation is discarded because of its number to small, num: %d, relation: %s', len(all_samples), str(relation))
@@ -214,26 +217,32 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
                 template_cur = '[X] => [Y] .'
                 if args.dataset == 'trex_2i':
                     breakpoint()
-        
+
         # if template is active (1) use a single example for (sub,obj) and (2) ...
         if template_cur is not None and template_cur != "":
             facts = []
+            added_samples = []
             for sample in all_samples:
                 sub = sample["sub_label"]
                 obj = sample["obj_label"]
                 aux = sample['aux_label'] if 'aux_label' in sample else ''
                 if (sub, obj, aux) not in facts:
                     facts.append((sub, obj, aux))
-            local_msg = "distinct template facts: {}".format(len(facts))
-            logger.info("\n" + local_msg + "\n")
-            print(local_msg)
+                    added_samples.append(sample)
+                else:
+                    print("===same relation exists===\n", sample)
+                    # pdb.set_trace()
+            # local_msg = "distinct template facts: {}".format(len(facts))
+            # logger.info("\n" + local_msg + "\n")
+            # print(local_msg)
             all_samples, relvec_last_co = [], -1
             for f_i, fact in enumerate(facts):
                 (sub, obj, aux) = fact
-                sample = {}
+                sample = added_samples[f_i]
                 sample["sub_label"] = sub
                 sample["obj_label"] = obj
-                if len(aux) > 0: sample['aux_label'] = aux
+                if len(aux) > 0:
+                    sample['aux_label'] = aux
                 sample['template'] = template_cur
                 sample["templated_sentences"] = parse_template(template_cur, sample, sample["sub_label"].strip(), model.mask_token)
                 if args.relation_mode == 'template':
@@ -243,27 +252,27 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
                 if args.relation_mode == 'relvec':
                     if args.relvec_initialize_mode == 'from_template':
                         #we will convert to relvec in the roberta_connector
-                        sample['masked_sentences'] = sample["templated_sentences"] 
+                        sample['masked_sentences'] = sample["templated_sentences"]
                     else:
                         ss, relvec_idx = '', 0
                         if 'F' in args.relvec_position:
                             for k in range(args.relvec_num):
                                 ss = ss + model.relvec_tokens[relvec_idx] + ' '
                                 relvec_idx += 1
-                        
+
                         ss += sub + ' '
                         if 'M' in args.relvec_position:
                             for k in range(args.relvec_num):
                                 ss = ss + model.relvec_tokens[relvec_idx] + ' '
                                 relvec_idx += 1
-                        
+
                         if len(aux) > 0:
                             ss += aux + ' '
                             for k in range(args.relvec_num):
                                 ss = ss + model.relvec_tokens[relvec_idx] + ' '
                                 relvec_idx += 1
 
-                        ss += model.mask_token 
+                        ss += model.mask_token
                         if 'E' in args.relvec_position:
                             for k in range(args.relvec_num):
                                 ss = ss + ' ' + model.relvec_tokens[relvec_idx]
@@ -272,21 +281,21 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
                         tokenized_ss = model.tokenizer(ss)['input_ids'] #check that the vec is there after tokenization
                         assert(model.mask_token_id in tokenized_ss and model.relvec_idxs[0] in tokenized_ss)
 
-                if (f_i == 0 or f_i % 200 == 0) and f_i < 2000:
-                    print('example', f_i, ':', sub, ',', obj, 'sentence:', sample['masked_sentences'])
+                # if (f_i == 0 or f_i % 200 == 0) and f_i < 2000:
+                #     print('example', f_i, ':', sub, ',', obj, 'sentence:', sample['masked_sentences'])
                 sample['relation'] = relation
                 all_samples.append(sample)
 
-        # create uuid if not present
-        i = 0
-        for sample in all_samples:
-            if "uuid" not in sample:
-                sample["uuid"] = i
-            i += 1
+        # # create uuid if not present
+        # i = 0
+        # for sample in all_samples:
+        #     if "uuid" not in sample:
+        #         sample["uuid"] = i
+        #     i += 1
 
         for sample in all_samples:
             sample['masked_sentence_ori'] = sample['masked_sentences'][0]
-        
+
         split_d = {} #split_d contains the final split results
         fewshot_ft_samples, fewshot_objs_d, fewshot_context_s = [], {}, ''
         random.shuffle(all_samples)
@@ -296,14 +305,14 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
             for k in range(args.fewshot_context):
                 sample = all_samples[k]
                 assert(len(sample['masked_sentences']) == 1)
-                ms = sample['masked_sentences'][0] 
+                ms = sample['masked_sentences'][0]
                 assert(('[MASK]' in ms) or ('<mask>' in ms))
-                sample['incontext_sentence'] = ms.replace('[MASK]', sample['obj_label']).replace('<mask>', sample['obj_label']) 
+                sample['incontext_sentence'] = ms.replace('[MASK]', sample['obj_label']).replace('<mask>', sample['obj_label'])
                 split_d['fewshot_samples'].append(sample)
                 #fewshot_context_s += ms.replace('[MASK]', sample['obj_label']).replace('<mask>', sample['obj_label']) + ' '
                 if ms not in fewshot_objs_d: fewshot_objs_d[ms] = []
                 fewshot_objs_d[ms].append(sample['obj_label'])
-            #context_s = context_s.replace('.', ',') 
+            #context_s = context_s.replace('.', ',')
             print('removing fewshot_context examples from the all_samples (they will not appear in multi-target samples)...')
             all_samples = all_samples[args.fewshot_context:]
             split_d['fewshot_samples_dev'] = copy.deepcopy(all_samples[:args.fewshot_ft_devnum])
@@ -315,7 +324,7 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
             #for sample in all_samples:
             #    assert(len(sample['masked_sentences']) == 1)
             #    sample['masked_sentences'][0] = fewshot_context_s + sample['masked_sentences'][0]
-            
+
         if args.fewshot_ft > 0:
             assert(args.fewshot_ft < len(all_samples))
             for k in range(args.fewshot_ft):
@@ -325,11 +334,11 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
                 ms = sample['masked_sentences'][0]
                 if ms not in fewshot_objs_d: fewshot_objs_d[ms] = []
                 fewshot_objs_d[ms].append(sample['obj_label'])
-            #context_s = context_s.replace('.', ',') 
+            #context_s = context_s.replace('.', ',')
             print('removing fewshot examples from the test-set (they will not appear in multi-target samples)...')
             all_samples = all_samples[args.fewshot_ft:]
-            assert(args.fewshot_ft_devnum < len(all_samples))     
-            
+            assert(args.fewshot_ft_devnum < len(all_samples))
+
             fewshot_ft_samples_dev = copy.deepcopy(all_samples[:args.fewshot_ft_devnum])
             if args.fewshot_exclude_dev:
                 all_samples = all_samples[args.fewshot_ft_devnum:]
@@ -341,7 +350,7 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
             #if args.fewshot_ft_mode == 'gather':
             #    fewshot_tr_gather.extend(fewshot_samples)
             #    fewshot_dev_gather.extend(fewshot_samples_dev)
- 
+
         #deal with multi-target relations
         samples_d = {}
         for sample in all_samples:
@@ -351,7 +360,7 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
                 sample['obj_labels'] = [sample['obj_label']]
                 if fewshot_objs_d is not None and ms in fewshot_objs_d:
                     sample['fewshot_obj_labels'] = fewshot_objs_d[ms]
-                sample['obj_label'] = None 
+                # sample['obj_label'] = None
                 samples_d[ms] = sample
             else:
                 samples_d[ms]['obj_labels'].append(sample['obj_label'])
@@ -361,7 +370,7 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
                 print('debug: a sample of multiple-targets', samples_d[ms])
                 break
         all_samples = list(samples_d.values())
-        
+
         if args.dataset == 'trex_2i' and len(all_samples) > 1000:
             print('shrinking all_samples to 1k...')
             all_samples = all_samples[:1000]
@@ -372,7 +381,13 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, model, args)
         #if relation['relation'] == 'P19':
         #    breakpoint()
         final_d[relation['relation']] = split_d
-    
+    for (k, v) in final_d.items():
+        with open(f'data/TREx_lpaqa_templates/{k}.jsonl', "w") as out_file:
+            for example in final_d[k]['test_samples']:
+                json.dump(example, out_file)
+                out_file.write('\n')
+
+    pdb.set_trace()
     return final_d
 
 def run_experiments(
@@ -400,11 +415,11 @@ def run_experiments(
     type_count = defaultdict(list)
 
     results_file = open("last_results.csv", "w+")
-    
+
     all_data_d = load_and_prepare_data(relations, data_path_pre, data_path_post, model, given_args)
-    
+
     #if given_args.play_find_multi_hop:
-    #    play_multi_hop.find_multi_hop(all_data_d) 
+    #    play_multi_hop.find_multi_hop(all_data_d)
     #    sys.exit(0)
 
     if given_args.fewshot_ft > 0 and given_args.fewshot_ft_mode == 'gather':
@@ -416,9 +431,9 @@ def run_experiments(
                 fewshot_dev_gather.extend(data_d['fewshot_samples_dev'])
         logger.info('len(fewshot_tr_gather): %d len(fewshot_dev_gather): %d', len(fewshot_tr_gather), len(fewshot_dev_gather))
         logger.info('fewshot_ft gather mode, starting fine-tuning model...')
-        fewshot_ft_res = model.mlm_finetune(fewshot_tr_gather, fewshot_dev_gather, given_args)  
+        fewshot_ft_res = model.mlm_finetune(fewshot_tr_gather, fewshot_dev_gather, given_args)
 
-    all_res_d = {} 
+    all_res_d = {}
     for r_count, relation in enumerate(relations):
         logger.info('relation idx: %d', r_count)
         if given_args.only_run_num > 0 and r_count >= given_args.only_run_num:
@@ -447,7 +462,7 @@ def run_experiments(
             PARAMETERS["template"] = relation["template"]
             if use_negated_probes:
                 PARAMETERS["template_negated"] = relation["template_negated"]
-        
+
         PARAMETERS.update(input_param)
         if given_args is not None:
             PARAMETERS.update(given_args.__dict__)
@@ -464,7 +479,7 @@ def run_experiments(
             print("Relation {} excluded.".format(relation["relation"]))
             print("Exception: {}".format(e))
             continue
-        
+
         if args.lowercase:
             # lowercase all samples
             logger.info("lowercasing all samples...")
@@ -472,7 +487,7 @@ def run_experiments(
         else:
             # keep samples as they are
             all_samples = data
-        
+
         vocab_subset = None
         vocab_subset = load_vocab(args.common_vocab_filename)
         all_samples, ret_msg = filter_samples(model, data, vocab_subset, args.max_sentence_length, args.template)
@@ -491,7 +506,7 @@ def run_experiments(
         all_Precision1.append(Precision1)
         all_MRR.append(MRR)
         all_count.append(num_cur)
-        
+
         all_results['relation'] = relation
         all_res_d[relation['relation']] = all_results
 
@@ -504,7 +519,7 @@ def run_experiments(
             type_Precision1[relation["type"]].append(Precision1)
             data = load_file(PARAMETERS["dataset_filename"])
             type_count[relation["type"]].append(num_cur) #len(data))
-    
+
     #end of "for relation in relations: "
     print()
     print('count list for each relation:', all_count)
@@ -520,7 +535,7 @@ def run_experiments(
             input_param["label"],
             t,
             np.mean(l),
-            #normweighted_sum(l, type_count[t]), #statistics.mean(l), 
+            #normweighted_sum(l, type_count[t]), #statistics.mean(l),
             sum(type_count[t]),
             len(type_count[t]),
             flush=True,
@@ -540,13 +555,13 @@ def get_TREx_multihop_parameters(data_path_pre="data/"):
     data_path_pre += "trex_multihop/"
     data_path_post = ".jsonl"
     return relations, data_path_pre, data_path_post
- 
+
 def get_TREx_2i_parameters(data_path_pre="data/"):
     relations = load_file("{}/trex_2i_relations.jsonl".format(data_path_pre))
     data_path_pre += "trex_2i/"
     data_path_post = ".jsonl"
     return relations, data_path_pre, data_path_post
- 
+
 def get_GoogleRE_parameters():
     relations = [
         {
@@ -592,7 +607,7 @@ def run_all_LMs(parameters, d_n, given_args = None):
     for ip in LMs:
         print(ip["label"])
         m_id = ip['label']
-        
+
         args.save_dir = args.save_dir_root + '/' + d_n + '_' + m_id + '/'
 
         os.system('mkdir -p ' + args.save_dir)
@@ -601,7 +616,7 @@ def run_all_LMs(parameters, d_n, given_args = None):
         else:
             log_fn = args.save_dir + '/' + 'log_dryrun.txt'
         setLogger(logger, log_fn)
-     
+
         set_seed(args)
         res = run_experiments(*parameters, input_param=ip, use_negated_probes=False, given_args = given_args)
         res_d[m_id] = res
@@ -642,12 +657,12 @@ if __name__ == "__main__":
     #print("1. Google-RE")
     #parameters = get_GoogleRE_parameters()
     #run_all_LMs(parameters)
-   
+
     if 'trex' == args.dataset:
         print("2. T-REx")
         parameters = get_TREx_parameters()
         run_all_LMs(parameters, 'trex', given_args = args)
-    
+
     if 'trex_multihop' == args.dataset:
         print("T-Rex multi-hop")
         parameters = get_TREx_multihop_parameters()
@@ -662,10 +677,10 @@ if __name__ == "__main__":
         print("3. ConceptNet")
         parameters = get_ConceptNet_parameters()
         run_all_LMs(parameters, 'conceptnet', given_args = args)
-    
+
     if 'squad' == args.dataset:
         print("4. SQuAD")
         parameters = get_Squad_parameters()
         run_all_LMs(parameters, 'squad', given_args = args)
-    
+
     logger.info('%s', str(args))

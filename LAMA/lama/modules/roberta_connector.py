@@ -13,7 +13,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 
 from transformers import RobertaTokenizer #, RobertaForMaskedLM
-from .my_modeling_roberta import MyRobertaForMaskedLM 
+from .my_modeling_roberta import MyRobertaForMaskedLM
 from transformers.optimization import AdamW, get_linear_schedule_with_warmup
 import torch, copy, random
 import logging
@@ -40,7 +40,7 @@ class Roberta(Base_Connector):
         self.f_mode = 'default'    #forward mode
 
         #self.relvec_tokens = ["<relvec0>", "<relvec1>", "<relvec2>", "<relvec3>", "<relvec4>", "<relvec5>", "<relvec6>", "<relvec7>", "<relvec8>", "<relvec9>"]
-        if hasattr(args, 'relvec_max_num'): 
+        if hasattr(args, 'relvec_max_num'):
             logger.info('using relvec_max_num : %d', args.relvec_max_num)
             self.relvec_tokens = ["<relvec{}>".format(k) for k in range(args.relvec_max_num)]
             logger.info('[roberta] adding relvec_tokens to tokenizer: %s', str(self.relvec_tokens))
@@ -48,12 +48,12 @@ class Roberta(Base_Connector):
             for relvec_token in self.relvec_tokens:
                 tokenizer._add_tokens([relvec_token], special_tokens = True)
                 self.relvec_idxs.append(len(tokenizer) - 1)
-            
+
             logger.info('[roberta] resize embeddings, and setting them to zero, note: the output linear weight will also be set to zero, i might want to reset them everytime during finetuning')
             model.resize_token_embeddings(len(tokenizer))
             for idx in self.relvec_idxs:
-                model.roberta.embeddings.word_embeddings.weight[idx] = 0
-                model.lm_head.bias[idx] = -100
+                model.roberta.embeddings.word_embeddings.weight.data[idx] = 0
+                model.lm_head.bias.data[idx] = -100
                 #model.lm_head.decoder.weight[i] will also be se to zero because they are shared
             self.relvec_params, self.relvec_mlp = None, None
             if args.relation_mode == 'relvec':
@@ -90,7 +90,7 @@ class Roberta(Base_Connector):
         self.pad_id = self.tokenizer.pad_token_id
 
         self.unk_index = self.tokenizer.unk_token_id
-    
+
     def create_relvec_mlp(self):
         ll, args = [], self.args
         assert(args.relvec_mlp_layer_num >= 1)
@@ -102,12 +102,12 @@ class Roberta(Base_Connector):
             ll.append(nn.Tanh())
         mlp = torch.nn.Sequential(*ll).cuda()
         return mlp
-    
+
     def reinitialize_relvec_params(self, seed, sample = None):
         logger.info('reinitialize_relvec_params with seed %d scale %f', seed, self.args.relvec_initialize_scale)
         torch.manual_seed(seed)
         model, args, tokenizer = self.model, self.args, self.tokenizer
-        
+
         if args.relvec_initialize_mode == 'gaussian':
             self.relvec_params = torch.nn.Parameter(torch.randn(len(self.relvec_tokens), model.roberta.embeddings.word_embeddings.weight.size(1)).cuda() * self.args.relvec_initialize_scale)
         if args.relvec_initialize_mode == 'from_template':
@@ -115,7 +115,7 @@ class Roberta(Base_Connector):
                 ms = sample['templated_sentences'][0]
                 ww = torch.zeros(len(self.relvec_tokens), model.roberta.embeddings.word_embeddings.weight.size(1)).cuda()
                 input_ids_ori = torch.LongTensor(tokenizer([ms])['input_ids'])
-                input_ids_relvec = self.convert_template_to_relvec(input_ids_ori, [sample]) 
+                input_ids_relvec = self.convert_template_to_relvec(input_ids_ori, [sample])
                 msg = ''
                 for i, r_idx in enumerate(input_ids_relvec[0].tolist()):
                     if r_idx in self.relvec_idxs:
@@ -125,7 +125,7 @@ class Roberta(Base_Connector):
                             ww[r] = model.roberta.embeddings.word_embeddings.weight[w_idx].detach().data
                         msg += '{} initialized to {}, '.format(self.relvec_tokens[r], self.vocab[w_idx])
                 logger.info('%s', msg)
-                self.relvec_params = torch.nn.Parameter(ww) 
+                self.relvec_params = torch.nn.Parameter(ww)
             else:
                 self.relvec_params = torch.nn.Parameter(torch.zeros(len(self.relvec_tokens), model.roberta.embeddings.word_embeddings.weight.size(1)).cuda() * self.args.relvec_initialize_scale)
 
@@ -153,7 +153,7 @@ class Roberta(Base_Connector):
                 if w in vocab_subset:
                     index_list.append(w_idx)
                     hit_vocab.append(w)
-            
+
             assert(len(set(hit_vocab)) == len(vocab_subset))
             print('len(index_list):', len(index_list), 'len(vocab_subset)', len(vocab_subset), 'the first one should be larger than the second one for roberta')
             self.last_built_index_list = index_list
@@ -169,7 +169,7 @@ class Roberta(Base_Connector):
     def get_id_obj_label(self, string):
         tokenizer = self.tokenizer
         inputs = tokenizer([' ' + string], return_tensors="pt")
-        return inputs['input_ids'][0].tolist()[1:-1] 
+        return inputs['input_ids'][0].tolist()[1:-1]
 
     def _cuda(self):
         self.model = self.model.cuda()
@@ -190,14 +190,14 @@ class Roberta(Base_Connector):
             sentences_list[k] = sentences_list[k].replace('[MASK]', '<mask>')
         #if try_cuda:
         #    self.try_cuda()
-        
+
         tokenizer, model, args = self.tokenizer, self.model, self.args
         model.eval()
         sentences_list = self.truncate_512(sentences_list)
         inputs = tokenizer(sentences_list, return_tensors="pt", padding = True)
         assert(inputs['input_ids'].size(1) <= 512)
         for k in inputs: inputs[k] = inputs[k].cuda()
-        
+
         if args.relation_mode == 'relvec' and args.relvec_initialize_mode == 'from_template':
             inputs['input_ids'] = self.convert_template_to_relvec(inputs['input_ids'], samples_list)
 
@@ -205,7 +205,7 @@ class Roberta(Base_Connector):
             outputs = model(**inputs, labels=inputs['input_ids'], my_mode = self.f_mode, my_connector = self)
             logits = outputs.logits
             log_probs = F.log_softmax(logits, dim=-1).cpu()
-        
+
         token_ids_list = inputs['input_ids'].cpu().tolist()
         masked_indices_list = []
         for lis in token_ids_list:
@@ -215,11 +215,11 @@ class Roberta(Base_Connector):
                     l_m.append(w_idx)
             assert(len(l_m) == 1)
             masked_indices_list.append(l_m)
-        
+
         return log_probs, token_ids_list, masked_indices_list
-    
+
     def get_optimizers(self, model, args):
-        # copied from hugging face       
+        # copied from hugging face
         # Prepare optimizer and schedule (linear warmup and decay)
         no_decay = ["bias", "LayerNorm.weight"]
         learning_rate = args.learning_rate
@@ -246,21 +246,21 @@ class Roberta(Base_Connector):
                     "params": [p for n, p in model.named_parameters() if any((nd in n) for nd in no_decay) and (not any((nd in n) for nd in exclude_lis))],
                     "weight_decay": 0.0,
                 },
-            ] 
+            ]
             self.params_for_clip = optimizer_parameters[0]['params'] + optimizer_parameters[1]['params']
             if args.relation_mode == 'relvec':
                 if args.fewshot_ft_param_all_lr_overwrite == False:
                     logger.info('note: using relvec_learning_rate for the relvec_params %f', args.relvec_learning_rate)
                     relvec_lr = args.relvec_learning_rate
                 else:
-                    logger.info('note: using overwrited learning_rate for the relvec_params %f', args.learning_rate) 
+                    logger.info('note: using overwrited learning_rate for the relvec_params %f', args.learning_rate)
                     relvec_lr = args.learning_rate
                 optimizer_parameters.append({'params': [self.relvec_params], 'weight_decay': args.relvec_weight_decay, 'lr': relvec_lr})
                 #optimizer_parameters.append({'params': [self.relvec_params], 'weight_decay': args.relvec_weight_decay})
                 if args.relvec_input_mode == 'mlp':
                     optimizer_parameters[-1]['params'].extend(list(self.relvec_mlp.parameters()))
                 self.params_for_clip.extend(optimizer_parameters[-1]['params'])
-     
+
             logger.info('number of all params: %d number of params that will actually optimize: %d', len(list(model.parameters())), len(self.params_for_clip))
         elif param_mode == 'only_final_bias':
             assert(args.relation_mode == 'template')
@@ -272,7 +272,7 @@ class Roberta(Base_Connector):
             else:
                 ps = []
             for i in range(len(model.roberta.encoder.layer)):
-                ps.append(model.roberta.encoder.layer[i].attention.self.query.bias) 
+                ps.append(model.roberta.encoder.layer[i].attention.self.query.bias)
                 ps.append(model.roberta.encoder.layer[i].intermediate.dense.bias)
             optimizer_parameters = [{"weight_decay": 0.0, "params": list(ps)}]
             self.bitfit_params = list(ps)
@@ -283,7 +283,7 @@ class Roberta(Base_Connector):
                     logger.info('note: using relvec_learning_rate for the relvec_params %f', args.relvec_learning_rate)
                     relvec_lr = args.relvec_learning_rate
                 else:
-                    logger.info('note: using overwrited learning_rate for the relvec_params %f', args.learning_rate) 
+                    logger.info('note: using overwrited learning_rate for the relvec_params %f', args.learning_rate)
                     relvec_lr = args.learning_rate
                 optimizer_parameters.append({'params': [self.relvec_params], 'weight_decay': args.relvec_weight_decay, 'lr': relvec_lr})
                 #optimizer_parameters.append({'params': [self.relvec_params], 'weight_decay': args.relvec_weight_decay})
@@ -306,7 +306,7 @@ class Roberta(Base_Connector):
         optimizer = AdamW(optimizer_parameters, lr = learning_rate, eps = args.adam_epsilon)
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps = args.warmup_steps, num_training_steps=args.max_training_steps)
         return optimizer, scheduler
-    
+
     def convert_template_to_relvec(self, input_ids, samples):
         assert(len(input_ids) == len(samples))
         tokenizer, model, relvec_last_co = self.tokenizer, self.model, -1
@@ -338,7 +338,7 @@ class Roberta(Base_Connector):
         res = torch.LongTensor(res_lis).cuda()
         assert(res.size() == input_ids.size())
         return res
-    
+
     def truncate_512(self, sen_lis):
         tokenizer = self.tokenizer
         inputs = tokenizer(sen_lis, return_tensors="pt", padding = True)
@@ -362,13 +362,13 @@ class Roberta(Base_Connector):
 
         sen_lis = [item['sentence'] for item in mb]
         targets = torch.LongTensor([item['obj_idx'] for item in mb]).cuda()
-        
+
         sen_lis = self.truncate_512(sen_lis)
         inputs = tokenizer(sen_lis, return_tensors="pt", padding = True)
 
         assert(inputs['input_ids'].size(1) <= 512)
         for k in inputs: inputs[k] = inputs[k].cuda()
- 
+
         if args.relation_mode == 'relvec' and args.relvec_initialize_mode == 'from_template':
             inputs['input_ids'] = self.convert_template_to_relvec(inputs['input_ids'], mb)
 
@@ -382,7 +382,7 @@ class Roberta(Base_Connector):
             assert(len(l_m) == 1)
             masked_indices_list.append(l_m[0])
         res_d['masked_indices_list'] = masked_indices_list
-        
+
         outputs = model(**inputs, labels=inputs['input_ids'], my_mode = self.f_mode, my_connector = self)
         logits = outputs.logits
         logits = logits[list(range(logits.size(0))), masked_indices_list, :]
@@ -400,17 +400,17 @@ class Roberta(Base_Connector):
             scheduler.step()
             with torch.no_grad():
                 for i in self.relvec_idxs: #the relvec are stored and optimized elsewhere, so here I just set it to zero
-                    model.roberta.embeddings.word_embeddings.weight[i] = 0
+                    model.roberta.embeddings.word_embeddings.weight.data[i] = 0
 
         return ce_loss.item(), res_d
 
     def analysis_final_bias(self, train_set):
         bias_cur, vocab = self.model.lm_head.decoder.bias, self.vocab
-        s_lis = torch.argsort(self.model.lm_head.decoder.bias, descending = True).tolist() 
+        s_lis = torch.argsort(self.model.lm_head.decoder.bias, descending = True).tolist()
         logger.info('[analysis_final_bias]')
-    
+
         logger.info('train_set obj_labels: %s', str([item['obj_label'] for item in train_set]))
-        
+
         s_report = ''
         for i, idx in enumerate(s_lis[:30]):
             s_report += '{}_{} '.format(self.vocab[idx], str(bias_cur[idx].item())[:5])
@@ -422,7 +422,7 @@ class Roberta(Base_Connector):
             for sample in samples:
                 item = {}
                 item = {'sentence': sample['masked_sentences'][0]}
-                assert('[MASK]' in item['sentence'] or '<mask>' in item['sentence']) 
+                assert('[MASK]' in item['sentence'] or '<mask>' in item['sentence'])
                 item['sentence'] = item['sentence'].replace('[MASK]', '<mask>')
                 assert((chr(288) + sample['obj_label']) in self.inverse_vocab_ori)
                 item['obj_idx'] = self.inverse_vocab_ori[(chr(288) + sample['obj_label'])]
@@ -442,21 +442,21 @@ class Roberta(Base_Connector):
                 dev_loss_cur, res_d = self.mlm_forward_step(dev_set[s:s+32], self.model, optimizer, scheduler, args, do_train = False)
                 dev_loss_lis.append(dev_loss_cur)
             return {'best_dev_loss': np.mean(dev_loss_lis)}
-        
+
         model, best_dev_loss, state_best_dev, best_dev_step, relvec_best_dev, relvec_mlp_best_dev, res_d = self.model, 100, None, None, None, None, {}
         dev_interval = 10
         if 'bitfit' in args.fewshot_ft_param_mode:
             dev_interval = 5
             bitfit_params_ori = copy.deepcopy(self.bitfit_params)
-            
-        if do_log == True: 
+
+        if do_log == True:
             logger.info('dev_interval: %d', dev_interval)
         else:
             logger.info('do_log is False, logging will be skipped...')
         logger.info('mlm_finetune applying seed %d', seed)
         random.seed(seed) #for debugg!
         torch.manual_seed(seed)
-        
+
         for step_idx in range(args.fewshot_ft_maxsteps + 1):
             mb_cur = []
             if args.fewshot_ft_batch_mode == 'random':
@@ -467,7 +467,7 @@ class Roberta(Base_Connector):
                 mb_cur = train_set
 
             train_loss_cur, res_d = self.mlm_forward_step(mb_cur, self.model, optimizer, scheduler, args, do_train = True if step_idx > 0 else False)
-            
+
             if step_idx % dev_interval == 0:
                 dev_loss_lis = []
                 for s in range(0, len(dev_set), 32):
@@ -475,7 +475,7 @@ class Roberta(Base_Connector):
                     dev_loss_lis.append(dev_loss_cur)
                     #print('debug dev', s, len(dev_set[s:s+32]))
                 dev_loss_cur = np.mean(dev_loss_lis)
-                if do_log == True: 
+                if do_log == True:
                     logger.info('step: %d train_loss_cur: %f dev_loss_cur: %f', step_idx, train_loss_cur, dev_loss_cur)
                 if dev_loss_cur < best_dev_loss:
                     best_dev_loss, best_dev_step = dev_loss_cur, step_idx
@@ -484,18 +484,18 @@ class Roberta(Base_Connector):
                         relvec_best_dev = copy.deepcopy(self.relvec_params)
                     if self.relvec_mlp is not None:
                         relvec_mlp_best_dev = copy.deepcopy(self.relvec_mlp)
-                    
+
                 if dev_loss_cur > best_dev_loss * 1.4:
                     logger.info('dev_loss became worse, early stopped')
                     break
             #assert(best_dev_step < args.fewshot_ft_maxsteps - 1)
-        
+
         self.model.load_state_dict(state_best_dev) #rolling back
         if self.relvec_params is not None:
             self.relvec_params = relvec_best_dev
         if self.relvec_mlp is not None:
             self.relvec_mlp = relvec_mlp_best_dev
-        
+
         dev_loss_lis = []
         for s in range(0, len(dev_set), 32):
             dev_loss_cur, res_d = self.mlm_forward_step(dev_set[s:s+32], self.model, optimizer, scheduler, args, do_train = False)
@@ -508,8 +508,8 @@ class Roberta(Base_Connector):
         #for evaluation, for now assuming the whole dev set can be evaluated in one single mb
 
         if args.fewshot_ft_param_mode == 'only_final_bias':
-            self.analysis_final_bias(train_set)               
-        
+            self.analysis_final_bias(train_set)
+
         if 'bitfit' in args.fewshot_ft_param_mode:
             res_d['bitfit_params_ori'] = bitfit_params_ori
             res_d['bitfit_params_ft'] = copy.deepcopy(self.bitfit_params)
