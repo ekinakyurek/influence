@@ -57,14 +57,15 @@ flags.DEFINE_bool('normalize', default=False,
                   help="normalize embeddings")
 
 
-def normalize_segments(array):
-    num_segments = array.shape[1] // 1024
+def normalize_segments(array, size=768):
+    num_segments = array.shape[1] // size
     for i in range(num_segments):
-        array[:, (i-1)*1024:i*1024] = F.normalize(array[:, (i-1)*1024:i*1024])
+        array[:, (i-1)*size:i*size] = F.normalize(array[:, (i-1)*size:i*size])
     return array
 
 def get_tfexample_decoder(feature_length):
     """Returns tf dataset parser."""
+    print("feature_length: ", feature_length)
     vector_feature_description = {
         'index': tf.io.FixedLenFeature([1], tf.int64),
         'embedding': tf.io.FixedLenFeature([feature_length], tf.float32),
@@ -226,6 +227,7 @@ def main(_):
     #                            FLAGS.feature_size)
 
     shards, positions = asyncio.run(_prepare_shards(FLAGS))
+    print("reading abstract vectors from: ", FLAGS.abstract_vectors)
     abstract_indices = get_indices(sharded_open(FLAGS.abstract_vectors), FLAGS.feature_size)
 
     # create_dummy_tfrecord_dataset(FLAGS.test_vectors, 100, FLAGS.feature_size)
