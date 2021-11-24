@@ -139,7 +139,7 @@ def main(_):
         precisions.append(precision)
         recalls.append(recall)
         rrs.append(reciprocal_rank(nn_ids, uris))
-        if len(metrics['samples']) < 10 and FLAGS.abstract_file is not None:
+        if len(metrics['samples']) < 100 and FLAGS.abstract_file is not None:
             facts_abstracts = []
             for uri in uris:
                 ids_w_uri = np.where(uri_list == uri)[0]

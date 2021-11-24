@@ -2,9 +2,9 @@ export T5=T5_checkpoints/1000000/model/
 
 # deactivate
 #
-# conda activate transformer
+# conda activate transformers
 
-for i in 10200 15300; do
+for i in 20400; do
 	transformers-cli convert \
 			 --model_type t5 \
 			 --tf_checkpoint $T5/model.ckpt-${i} \
