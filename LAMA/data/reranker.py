@@ -30,16 +30,16 @@ flags.DEFINE_string('test_file', default=None,
                     help='input file path to convert')
 
 flags.DEFINE_string('metrics_file', default=None,
-                    help='output file path to writer neighbours')
+                    help='input metrics file that stores baseline statistics and (examples, nn abstracts)')
 
 flags.DEFINE_string('output_metrics_prefix', default=None,
-                    help='output file path to write neighbours')
+                    help='output file for experiment results')
 
 flags.DEFINE_string('checkpoint_folders', default=None,
-                    help='checkpoint_prefix')
+                    help='list of checkpoint folders (coma spereated)')
 
 flags.DEFINE_string('layers', default=None,  # 'encoder/block/0'
-                    help='layers used in reranking')
+                    help='layers used in reranking (deprecated)')
 
 flags.DEFINE_string('hashmap_file', default=None,
                     help='hashmap that maps relation,obj,subj->page_uris')
@@ -51,10 +51,10 @@ flags.DEFINE_bool('only_corrects', default=False,
                   help="evaluate only on correctly predicted examples")
 
 flags.DEFINE_bool('only_wrongs', default=False,
-                  help="evaluate only on correctly predicted examples")
+                  help="evaluate only on wrong predicted examples")
 
 flags.DEFINE_bool('include_eos', default=False,
-                  help="evaluate only on correctly predicted examples")
+                  help="include eos on target or not")
 
 
 
