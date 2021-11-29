@@ -1,12 +1,13 @@
 #!/bin/bash
+lama_root='TREx_lama_templates_v2'
+uri_file=${lama_root}/abstracts/all_used_uris.txt
+abstract_file=${lama_root}/abstracts/all_used.tfrecord
+hashmap_file=${lama_root}/abstracts/hashmap_used.json
+test_file=${lama_root}/all.tfrecord
+abstract_json_file=${lama_root}/abstracts/all_used.jsonl
 
-uri_file=TREx_lama_templates/abstracts/all_used_uris.txt
-abstract_file=TREx_lama_templates/abstracts/all_used.tfrecord
-hashmap_file=hashmap.json
-test_file=TREx_lama_templates/all.tfrecord
-abstract_json_file=TREx_lama_templates/abstracts/all_used.jsonl
-nn_output_file=nns/bm25/bm25plus_nn_results.jsonl
-metric_output_file=metrics/bm25/bm25plus_metrics.json
+nn_output_file=nns/bm25/bm25plus_nn_results_v2.jsonl
+metric_output_file=metrics/bm25/bm25plus_metrics_v2.json
 
 
 python get_nns_bm25.py \

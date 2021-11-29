@@ -41,6 +41,7 @@ flags.DEFINE_integer('batch_size', default=10,
 flags.DEFINE_integer('topk', default=100,
                      help='batch size to process at once')
 
+
 def get_tfexample_decoder_examples():
     """Returns tf dataset parser."""
 
@@ -60,6 +61,7 @@ def get_tfexample_decoder_examples():
         return (data['inputs_pretokenized'], data['targets_pretokenized'])
 
     return _parse_data
+
 
 def get_tfexample_decoder_abstracts():
     """Returns tf dataset parser."""
@@ -83,9 +85,12 @@ def load_dataset_from_tfrecord(dataset):
     ds_loader = dataset.map(get_tfexample_decoder_abstracts()).as_numpy_iterator()
     return [d for d in ds_loader]
 
+
 def get_tokenized_query(record):
-    q = record[0].decode().replace('<extra_id_0>', record[1].decode()).split(" ")
+    answer = record[1].decode().replace('<extra_id_0> ', '')
+    q = record[0].decode().replace('<extra_id_0>', answer).split(" ")
     return q
+
 
 def main(_):
     abstract_dataset = tf.data.TFRecordDataset(FLAGS.abstract_file)

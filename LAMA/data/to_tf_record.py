@@ -40,24 +40,25 @@ def _tfrecord(record):
     obj_uri = record['obj_uri']
     sub_uri = record['sub_uri']
     sub_surface = record['sub_label']
+    obj_surface = record['obj_label']
     predicate_id = record['predicate_id']
     # evidences_tf = []
     evidences = []
     for (i, sentence) in enumerate(record['templated_sentences']):
         inputs_pretokenized = sentence.replace('<mask>', '<extra_id_0>')
-        for obj_surface in record['obj_labels']:
-            targets_pretokenized = '<extra_id_0> ' + obj_surface
-            feature_dict = {
-                'inputs_pretokenized': inputs_pretokenized,
-                'targets_pretokenized': targets_pretokenized,
-                'uuid': uuid,
-                'obj_uri': obj_uri,
-                'sub_uri': sub_uri,
-                'predicate_id': predicate_id,
-                'obj_surface': obj_surface,
-                'sub_surface': sub_surface,
-              }
-            evidences.append(feature_dict)
+        # for obj_surface in record['obj_labels']:
+        targets_pretokenized = '<extra_id_0> ' + obj_surface
+        feature_dict = {
+            'inputs_pretokenized': inputs_pretokenized,
+            'targets_pretokenized': targets_pretokenized,
+            'uuid': uuid,
+            'obj_uri': obj_uri,
+            'sub_uri': sub_uri,
+            'predicate_id': predicate_id,
+            'obj_surface': obj_surface,
+            'sub_surface': sub_surface,
+            }
+        evidences.append(feature_dict)
 
     return evidences
 

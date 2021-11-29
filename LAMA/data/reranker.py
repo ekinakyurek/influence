@@ -3,6 +3,7 @@ import torch  # TODO(ekina): make this jax
 import torch.nn.functional as F
 from absl import app
 from absl import flags
+from absl import logging
 import numpy as np
 from tqdm import tqdm
 from transformers import MT5ForConditionalGeneration, T5Tokenizer
@@ -53,9 +54,11 @@ flags.DEFINE_bool('only_corrects', default=False,
 flags.DEFINE_bool('only_wrongs', default=False,
                   help="evaluate only on wrong predicted examples")
 
+flags.DEFINE_bool('only_target_abstracts', default=False,
+                  help="only count same target abstracts as correct")
+
 flags.DEFINE_bool('include_eos', default=False,
                   help="include eos on target or not")
-
 
 
 def get_tfexample_decoder_examples():
@@ -105,7 +108,10 @@ def load_dataset_from_tfrecord(dataset, load_fn):
 def tokenize(tokenizer, record):
     """Tokenize the inputs and targets of a record"""
     inputs = tokenizer(record['inputs_pretokenized'],
-                       return_tensors='pt').input_ids
+                       return_tensors='pt',
+                       max_length=2048,
+                       truncation=True,
+                       ).input_ids
     targets = tokenizer(record['targets_pretokenized'],
                         return_tensors='pt').input_ids
    
@@ -132,20 +138,32 @@ def f_normalize(x):
     return F.normalize(x, dim=0)
 
 
-def precision_recall(nearest_ids, correct_ids, ks=(1, 5, 10, 50, 100)):
+def insert_answer(abstract):
+    return abstract['inputs_pretokenized'].replace('<extra_id_0>', abstract['targets_pretokenized'])
+
+
+def check_equal(a1, a2):
+    return insert_answer(a1) == insert_answer(a2) and a1['targets_pretokenized'] == a2['targets_pretokenized']
+
+
+def check_correct(a1, fact_abstracts):
+    return any((check_equal(a1, a) for a in fact_abstracts))
+
+
+def precision_recall(abstracts, fact_abstracts, ks=(1, 5, 10, 50, 100)):
     """Calculate precision and recall given nearest ids and correct ids"""
     precision, recall = {}, {}
     for k in ks:
-        nn_k = nearest_ids[:k]
-        precision[k] = len([1 for id in nn_k if id in correct_ids]) / k
-        recall[k] = len([1 for id in correct_ids if id in nn_k]) / len(correct_ids)
+        nn_k = abstracts[:k]
+        precision[k] = len([1 for a in nn_k if check_correct(a, fact_abstracts)]) / k
+        recall[k] = len([1 for a in fact_abstracts if check_correct(a, nn_k)]) / len(fact_abstracts)
     return precision, recall
 
 
-def reciprocal_rank(nearest_ids, correct_ids):
+def reciprocal_rank(abstracts, fact_abstracts):
     """Return reciprocal rank score"""
-    for i, id in enumerate(nearest_ids):
-        if id in correct_ids:
+    for i, a in enumerate(abstracts):
+        if check_correct(a, fact_abstracts):
             return 1 / (i+1)
     return 0
 
@@ -274,19 +292,21 @@ def rerank_with_scores(abstracts, layer_scores, layers=None):
     return abstracts_reranked, scores_reranked
 
 
-def evaluate(example, abstracts, hashmap):
+def evaluate(example, abstracts, fact_abstracts):
     """Evaluate nearast abstracts to get the metrics"""
-    key = ",".join((example['predicate_id'],
-                    example['obj_uri'],
-                    example['sub_uri']))
-
-    uris = hashmap.get(key, None)
-    if uris is None or len(uris) == 0:
+    # key = ",".join((example['predicate_id'],
+    #                 example['obj_uri'],
+    #                 example['sub_uri']))
+    if FLAGS.only_target_abstracts:
+        fact_abstracts = list(filter(lambda a: a['targets_pretokenized'] == example['targets_pretokenized'], fact_abstracts))
+        
+    if len(fact_abstracts) == 0:
+        logging.warn(f"empty fact abstract for query: {example}")
         return None, None, None
 
-    nn_ids = [a['page_uri'] for a in abstracts]
-    precision, recall = precision_recall(nn_ids, uris, ks=(1, 5, 10, 50, 100))
-    rr = reciprocal_rank(nn_ids, uris)
+    # nn_ids = [a['page_uri'] for a in abstracts]
+    precision, recall = precision_recall(abstracts, fact_abstracts, ks=(1, 5, 10, 50, 100))
+    rr = reciprocal_rank(abstracts, fact_abstracts)
     return precision, recall, rr
 
 
@@ -333,7 +353,7 @@ def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_
             
             for k, result in results.items():  # cosine or dot
                 abstracts_config, scores_config = rerank_with_scores(abstracts, scores[k], layers=config)
-                precision, recall, rr = evaluate(query, abstracts_config, hashmap)
+                precision, recall, rr = evaluate(query, abstracts_config, sample['fact_abstracts'])
                  
                 if config_name not in result:
                     result[config_name] = []
@@ -385,7 +405,7 @@ def run_random_baseline(hashmap, samples):
         scores_reranked = [1 for i in range(len(target_abstracts))] 
         scores_reranked += [0 for i in range(len(other_abstracts))]
         
-        precision, recall, rr = evaluate(query, abstracts_reranked, hashmap)
+        precision, recall, rr = evaluate(query, abstracts_reranked, sample['fact_abstracts'])
         
         results.append({
                     "example": sample["example"],
@@ -402,7 +422,7 @@ def get_model_accuracy(model: MT5Model, tokenizer: T5Tokenizer, samples, beam_si
     """Get prediction labels for the given samples"""
     labels = []
     for sample in samples:
-        raw_input =  sample["example"]['inputs_pretokenized']
+        raw_input = sample["example"]['inputs_pretokenized']
         data = tokenize(tokenizer, sample['example'])
         inputs = data['inputs']
         target = trim(sample['example']['targets_pretokenized'])
@@ -426,6 +446,10 @@ def main(_):
     random.seed(10)
 
     original_result = json.load(open(FLAGS.metrics_file))
+    print("original_result precision: ", original_result['precision'])
+    print("original_result recal: ", original_result['recall'])
+    print("original_result mrr: ", original_result['mrr'])
+    
     hashmap = json.load(open(FLAGS.hashmap_file, 'r'))
     tokenizer = T5Tokenizer.from_pretrained("google/mt5-base")
 
@@ -448,7 +472,7 @@ def main(_):
    
     print(f"Mean accuracy of last checkpoint is {np.mean(labels)}")
    
-    assert FLAGS.only_corrects != FLAGS.only_wrongs
+    assert not (FLAGS.only_corrects and FLAGS.only_wrongs)
     if FLAGS.only_corrects:
         samples = [samples[i] for i in range(len(labels)) if labels[i]]
         original_result['samples'] = samples
@@ -457,15 +481,24 @@ def main(_):
         samples = [samples[i] for i in range(len(labels)) if not labels[i]]
         original_result['samples'] = samples
 
+    included_samples = []
     for sample in samples:
-        precision, recall, rr = evaluate(sample['example'], sample['nn_abstracts'], hashmap)
+        precision, recall, rr = evaluate(sample['example'], sample['nn_abstracts'], sample['fact_abstracts'])
+        if precision is None:
+            continue
         if sample['rr'] != rr:
             print("original scores are changed -- probably due to a modification in evaluation")
         sample['precision'] = precision
         sample['recall'] = recall
         sample['rr'] = rr
-        
+        included_samples.append(sample)
+    
+    print("Samples filtered: ", len(samples) - len(included_samples))
+    samples = included_samples
     original_result = average_metrics(samples)
+    print("(after) original_result precision: ", original_result['precision'])
+    print("(after) original_result recal: ", original_result['recall'])
+    print("(after) original_result mrr: ", original_result['mrr'])
        
     # base = FLAGS.output_metrics_prefix + "_base.json"
     # with open(base, "w") as f:
