@@ -1,4 +1,5 @@
 import json
+from numpy.lib.function_base import average
 import torch  # TODO(ekina): make this jax
 import torch.nn.functional as F
 from absl import app
@@ -9,7 +10,8 @@ from tqdm import tqdm
 from transformers import MT5ForConditionalGeneration, T5Tokenizer
 import random
 import tensorflow as tf
-from transformers.utils.dummy_pt_objects import EncoderDecoderModel, MT5Model
+import copy
+# import pdb
 
 try:
     # Disable all GPUS
@@ -46,7 +48,7 @@ flags.DEFINE_string('hashmap_file', default=None,
                     help='hashmap that maps relation,obj,subj->page_uris')
 
 flags.DEFINE_integer('beam_size', default=3,
-                  help="beam size for accuracy calculations")
+                     help="beam size for accuracy calculations")
 
 flags.DEFINE_bool('only_corrects', default=False,
                   help="evaluate only on correctly predicted examples")
@@ -138,32 +140,31 @@ def f_normalize(x):
     return F.normalize(x, dim=0)
 
 
-def insert_answer(abstract):
-    return abstract['inputs_pretokenized'].replace('<extra_id_0>', abstract['targets_pretokenized'])
+def check_equal(a1, a2, collapse):
+    if collapse:
+        return a1['page_uri'] == a2['page_uri']
+    else:
+        return a1['page_uri'] == a2['page_uri'] and a1['targets_pretokenized'] == a2['targets_pretokenized']
 
 
-def check_equal(a1, a2):
-    return insert_answer(a1) == insert_answer(a2) and a1['targets_pretokenized'] == a2['targets_pretokenized']
+def check_correct(a1, fact_abstracts, collapse):
+    return any((check_equal(a1, a, collapse) for a in fact_abstracts))
 
 
-def check_correct(a1, fact_abstracts):
-    return any((check_equal(a1, a) for a in fact_abstracts))
-
-
-def precision_recall(abstracts, fact_abstracts, ks=(1, 5, 10, 50, 100)):
+def precision_recall(abstracts, fact_abstracts, ks=(1, 5, 10, 50, 100), collapse=False):
     """Calculate precision and recall given nearest ids and correct ids"""
     precision, recall = {}, {}
     for k in ks:
         nn_k = abstracts[:k]
-        precision[k] = len([1 for a in nn_k if check_correct(a, fact_abstracts)]) / k
-        recall[k] = len([1 for a in fact_abstracts if check_correct(a, nn_k)]) / len(fact_abstracts)
+        precision[k] = len([1 for a in nn_k if check_correct(a, fact_abstracts, collapse)]) / k
+        recall[k] = len([1 for a in fact_abstracts if check_correct(a, nn_k, collapse)]) / len(fact_abstracts)
     return precision, recall
 
 
-def reciprocal_rank(abstracts, fact_abstracts):
+def reciprocal_rank(abstracts, fact_abstracts, collapse=False):
     """Return reciprocal rank score"""
     for i, a in enumerate(abstracts):
-        if check_correct(a, fact_abstracts):
+        if check_correct(a, fact_abstracts, collapse):
             return 1 / (i+1)
     return 0
 
@@ -213,7 +214,7 @@ def get_all_scores_for_model(model, query, abstracts, encoder):
     query_grad = encoder(model, query)
     scores = []
     nscores = []
-    for i, abstract in tqdm(enumerate(abstracts)):
+    for i, abstract in enumerate(abstracts):
         abstract_grad = encoder(model, abstract)
         score = get_scores(query_grad, abstract_grad)
         scores.append(score)
@@ -229,7 +230,7 @@ def merge_model_scores(scores):
     abstract_scores = []
     for j in range(len(scores[0])):
             abstract_scores.append(
-                {k: np.mean([s[j][k] for s in scores])  #  Mean over checkpoints
+                {k: np.mean([s[j][k] for s in scores])  # Mean over checkpoints
                                     for k, _ in scores[0][j].items()})
     return abstract_scores
 
@@ -272,7 +273,26 @@ def get_all_scores(models, tokenizer, query, abstracts):
     return all_scores
 
 
-def rerank_with_scores(abstracts, layer_scores, layers=None):
+def collapse_abstracts_and_scores(scores, abstracts):
+    uri_to_indices = {}
+    for i, a in enumerate(abstracts):
+        uri = a['page_uri']
+        if uri in uri_to_indices:
+            uri_to_indices[uri].append(i)
+        else:
+            uri_to_indices[uri] = [i]
+    uri_scores = []
+    uri_indices = []
+    scores = np.array(scores)
+    for (uri, indices) in uri_to_indices.items():
+        i_max = np.argmax(scores[indices])
+        i_max = indices[i_max]
+        uri_indices.append(i_max)
+        uri_scores.append(scores[i_max])
+    return np.array(uri_scores), [abstracts[j] for j in uri_indices]
+    
+
+def rerank_with_scores(abstracts, layer_scores, layers=None, collapse=False):
     """Given layers prefixes we sum scores of these layers and rerank the abstracts"""
     abstract_scores = []
     if layers is not None:
@@ -286,27 +306,36 @@ def rerank_with_scores(abstracts, layer_scores, layers=None):
         abstract_scores.append(np.sum([layer_score[k] for k in sumk]))
 
     scores = np.array(abstract_scores)
+    # merge abstracts and scores here
+    if collapse:
+        scores, abstracts = collapse_abstracts_and_scores(scores, abstracts)
+    
     sorted_idxs = np.argsort(-scores)
     abstracts_reranked = [abstracts[i] for i in sorted_idxs]
     scores_reranked = scores[sorted_idxs]
+    
     return abstracts_reranked, scores_reranked
 
 
-def evaluate(example, abstracts, fact_abstracts):
+def evaluate(example, abstracts, fact_abstracts, only_target_abstracts=False, collapse=False):
     """Evaluate nearast abstracts to get the metrics"""
-    # key = ",".join((example['predicate_id'],
-    #                 example['obj_uri'],
-    #                 example['sub_uri']))
-    if FLAGS.only_target_abstracts:
+    assert not (only_target_abstracts and collapse)
+    
+    if only_target_abstracts:
         fact_abstracts = list(filter(lambda a: a['targets_pretokenized'] == example['targets_pretokenized'], fact_abstracts))
         
+    if collapse:
+        identifier = lambda x: x['page_uri']
+        _, idxs = np.unique(list(map(identifier, fact_abstracts)), return_index=True)
+        fact_abstracts = [fact_abstracts[id] for id in idxs]
+
     if len(fact_abstracts) == 0:
-        logging.warn(f"empty fact abstract for query: {example}")
+        logging.warning(f"empty fact abstract for query: {example}")
         return None, None, None
 
     # nn_ids = [a['page_uri'] for a in abstracts]
-    precision, recall = precision_recall(abstracts, fact_abstracts, ks=(1, 5, 10, 50, 100))
-    rr = reciprocal_rank(abstracts, fact_abstracts)
+    precision, recall = precision_recall(abstracts, fact_abstracts, ks=(1, 5, 10, 50, 100), collapse=collapse)
+    rr = reciprocal_rank(abstracts, fact_abstracts, collapse=collapse)
     return precision, recall, rr
 
 
@@ -321,7 +350,7 @@ def average_metrics(results):
     return metrics
 
 
-def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_layers=12):  #  TODO: Read num_layers from models
+def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_layers=12):  # TODO: Read num_layers from models
     """Runs reranking experiments for all configurations listed below and returns the results"""
     layer_configs = [('gradients.shared',), ('gradients.',)]
     layer_configs += [(f'gradients.encoder.block.{i}', f'gradients.decoder.block.{i}') for i in range(num_layers)]
@@ -335,8 +364,11 @@ def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_
     results = {'cosine': {}, 'dot': {}}
 
     for (i, sample) in tqdm(enumerate(samples)):
+        
         query = sample['example']
+        
         abstracts = sample['nn_abstracts'] + sample['fact_abstracts'] + sample['distractors']
+        
         random.shuffle(abstracts)
         
         # There might be intersecting abstracts in nn_abstracts and fact_abstracts and distractors
@@ -347,32 +379,47 @@ def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_
         # Get similarity scores for all individual weights x {activations, gradients, both}
         scores = get_all_scores(models, tokenizer, query, abstracts)
 
-        for config in layer_configs:
+        for k, result in results.items():  # cosine or dot
             
-            config_name = ",".join(config)
+            for method in ('collapse', 'target_abstracts', 'full'):  # eval methods
+                
+                if method not in result:
+                    result[method] = {}
+                    
+                collapse = (method == 'collapse')
+                only_target_abstracts = (method == 'target_abstracts')
+                                      
+                for config in layer_configs:
+        
+                    config_name = ",".join(config)
+                    
+                    if config_name not in result[method]:
+                        result[method][config_name] = []
             
-            for k, result in results.items():  # cosine or dot
-                abstracts_config, scores_config = rerank_with_scores(abstracts, scores[k], layers=config)
-                precision, recall, rr = evaluate(query, abstracts_config, sample['fact_abstracts'])
-                 
-                if config_name not in result:
-                    result[config_name] = []
+                    abstracts_config, scores_config = rerank_with_scores(abstracts, scores[k], layers=config, collapse=collapse)
+                               
+                    precision, recall, rr = evaluate(query, abstracts_config, sample['fact_abstracts'], only_target_abstracts=only_target_abstracts, collapse=collapse)
 
-
-                result[config_name].append({
-                    "example": sample["example"],
-                    "precision": precision,
-                    "recall": recall,
-                    "rr": rr,
-                    "nn_abstracts": abstracts_config[:100],
-                    "nn_scores": scores_config[:100].tolist(),
-                })
+                    if precision is not None:
+                        result[method][config_name].append({
+                            "example": sample["example"],
+                            "precision": precision,
+                            "recall": recall,
+                            "rr": rr,
+                            "nn_abstracts": abstracts_config[:100],
+                            "nn_scores": scores_config[:100].tolist(),
+                        })
+                    else:
+                        logging.warning(f"metrcics are none in method: {method}")
 
     metrics = {'cosine': {}, 'dot': {}}
     for k, result in results.items():
-        for (config_name, res) in result.items():
-            metrics[k][config_name] = average_metrics(res)
-            print(config_name, "\t", k, '\t', metrics[k][config_name]['mrr'])
+        for (method_name, res) in result.items():
+            metrics[k][method_name] = {}
+            for (config_name, r) in res.items():
+                average_result = average_metrics(r)
+                metrics[k][method_name][config_name] = average_result
+                print(config_name, "\t", method_name, '\t', k, '\t', average_result['mrr'])
 
     return metrics
 
@@ -390,35 +437,92 @@ def trim(output):
     return output.lower()
  
   
-def run_random_baseline(hashmap, samples):
-    results = []
+def run_random_baseline(samples):
+    metrics = {}
     for sample in samples:
         query = sample['example']
         target = query['targets_pretokenized']
-        
         abstracts = sample['nn_abstracts'] + sample['fact_abstracts'] + sample['distractors']
         random.shuffle(abstracts)
-   
         target_abstracts = [a for a in abstracts if a['targets_pretokenized'] == target]
         other_abstracts = [a for a in abstracts if a['targets_pretokenized'] != target]
         abstracts_reranked = target_abstracts + other_abstracts
         scores_reranked = [1 for i in range(len(target_abstracts))] 
         scores_reranked += [0 for i in range(len(other_abstracts))]
+        fact_abstracts = sample['fact_abstracts']
         
-        precision, recall, rr = evaluate(query, abstracts_reranked, sample['fact_abstracts'])
+        for method in ('collapse', 'target_abstracts', 'full'):
+                     
+            collapse = (method == 'collapse')
+            only_target_abstracts = (method == 'target_abstracts')    
+            
+            if method not in metrics:
+                metrics[method] = []
         
-        results.append({
-                    "example": sample["example"],
-                    "precision": precision,
-                    "recall": recall,
-                    "rr": rr,
-                    "nn_abstracts": abstracts_reranked[:100],
-                    "nn_scores": scores_reranked[:100]
-                })
-    return average_metrics(results)
+            results = metrics[method]
+            
+            current_scores, current_abstracts = scores_reranked, abstracts_reranked
+            
+            if collapse:
+                current_scores, current_abstracts = collapse_abstracts_and_scores(current_scores, current_abstracts)
+            
+            precision, recall, rr = evaluate(query, current_abstracts, fact_abstracts, only_target_abstracts=only_target_abstracts, collapse=collapse)
+            
+            if precision is not None:
+                results.append({
+                            "example": sample["example"],
+                            "precision": precision,
+                            "recall": recall,
+                            "rr": rr,
+                            "nn_abstracts": abstracts_reranked[:100],
+                            "nn_scores": scores_reranked[:100]
+                        })
+                
+    for method in metrics.keys():
+        metrics[method] = average_metrics(metrics[method])
+    return metrics
+
+
+def rerun_baseline(samples):
+    metrics = {}
+    for method in ('collapse', 'target_abstracts', 'full'):
+        if method not in metrics:
+            metrics[method] = []
+            
+        collapse = (method == 'collapse')
+        only_target_abstracts = (method == 'target_abstracts')
+        
+        for sample in copy.deepcopy(samples):
+            scores, abstracts = (sample['nn']['scores'], sample['nn_abstracts'])
+            
+            if collapse:
+                scores, abstracts = collapse_abstracts_and_scores(scores, abstracts)
+                
+            precision, recall, rr = evaluate(sample['example'], abstracts, sample['fact_abstracts'], only_target_abstracts=only_target_abstracts, collapse=collapse)
+        
+            if precision is None:
+                continue
+            
+            if sample['rr'] != rr:
+                logging.info(f"original scores are changed -- probably due to a modification in evaluation -- method: {method}")
+                logging.info(f"example: {sample['example']}")
+                logging.info(f"original ones: {(sample['precision'], sample['recall'], sample['rr'])}")
+                logging.info(f"new ones: {(precision, recall, rr)}")
+                
+            sample['precision'] = precision
+            sample['recall'] = recall
+            sample['rr'] = rr
+            
+            metrics[method].append(sample)
+                        
+        logging.info(f"Samples filtered: {len(samples) - len(metrics[method])}")
+        
+        metrics[method] = average_metrics(metrics[method])
+        
+    return metrics
+       
     
-    
-def get_model_accuracy(model: MT5Model, tokenizer: T5Tokenizer, samples, beam_size=3):
+def get_model_accuracy(model, tokenizer: T5Tokenizer, samples, beam_size=3):
     """Get prediction labels for the given samples"""
     labels = []
     for sample in samples:
@@ -446,10 +550,6 @@ def main(_):
     random.seed(10)
 
     original_result = json.load(open(FLAGS.metrics_file))
-    print("original_result precision: ", original_result['precision'])
-    print("original_result recal: ", original_result['recall'])
-    print("original_result mrr: ", original_result['mrr'])
-    
     hashmap = json.load(open(FLAGS.hashmap_file, 'r'))
     tokenizer = T5Tokenizer.from_pretrained("google/mt5-base")
 
@@ -470,9 +570,10 @@ def main(_):
                                 samples,
                                 beam_size=FLAGS.beam_size)
    
-    print(f"Mean accuracy of last checkpoint is {np.mean(labels)}")
+    logging.info(f"Mean accuracy of last checkpoint is {np.mean(labels)}")
    
     assert not (FLAGS.only_corrects and FLAGS.only_wrongs)
+    
     if FLAGS.only_corrects:
         samples = [samples[i] for i in range(len(labels)) if labels[i]]
         original_result['samples'] = samples
@@ -480,42 +581,27 @@ def main(_):
     if FLAGS.only_wrongs:
         samples = [samples[i] for i in range(len(labels)) if not labels[i]]
         original_result['samples'] = samples
-
-    included_samples = []
-    for sample in samples:
-        precision, recall, rr = evaluate(sample['example'], sample['nn_abstracts'], sample['fact_abstracts'])
-        if precision is None:
-            continue
-        if sample['rr'] != rr:
-            print("original scores are changed -- probably due to a modification in evaluation")
-        sample['precision'] = precision
-        sample['recall'] = recall
-        sample['rr'] = rr
-        included_samples.append(sample)
-    
-    print("Samples filtered: ", len(samples) - len(included_samples))
-    samples = included_samples
-    original_result = average_metrics(samples)
-    print("(after) original_result precision: ", original_result['precision'])
-    print("(after) original_result recal: ", original_result['recall'])
-    print("(after) original_result mrr: ", original_result['mrr'])
-       
-    # base = FLAGS.output_metrics_prefix + "_base.json"
-    # with open(base, "w") as f:
-    #     json.dump(original_result, f)
         
-    random_baseline = run_random_baseline(hashmap, samples)
+    logging.info(f"Original average scores: {(original_result['precision'], original_result['recall'], original_result['mrr'])}")
+    
+    baseline = rerun_baseline(samples)
+    
+    logging.info(f"Recalculated average scores: {(baseline['full']['precision'], baseline['full']['recall'], baseline['full']['mrr'])}")
+    
+    random_baseline = run_random_baseline(samples)
 
     metrics = run_all_layer_configs(models,
                                     tokenizer,
                                     hashmap,
                                     samples)
     
-    # unnecessary memory usage, but makes my job easier in plotting
-    metrics['dot']['bm25plus'] = metrics['cosine']['bm25plus'] = original_result
-    metrics['dot']['random'] = metrics['cosine']['random'] = random_baseline
+        # unnecessary memory usage, but makes my job easier in plotting
+    for method in metrics['dot'].keys():
+        metrics['dot'][method]['bm25plus'] = metrics['cosine'][method]['bm25plus'] = baseline[method]
+        metrics['dot'][method]['random'] = metrics['cosine'][method]['random'] = random_baseline[method]
+        
     
-    output = FLAGS.output_metrics_prefix + "_all.json"
+    output = FLAGS.output_metrics_prefix + ".json"
     with open(output, "w") as f:
         json.dump(metrics, f)
 

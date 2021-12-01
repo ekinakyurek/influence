@@ -106,7 +106,6 @@ def main(_):
         assert ([a['page_uri'] for a in abstracts] == uri_list).all()
         abstracts = np.array(abstracts)
 
-
     assert len(nns) == len(examples)
     assert max([max(nn['neighbor_ids']) for nn in nns]) < len(uri_list)
 
