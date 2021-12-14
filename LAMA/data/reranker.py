@@ -65,6 +65,9 @@ flags.DEFINE_bool('only_target_abstracts', default=False,
 flags.DEFINE_bool('include_eos', default=False,
                   help="include eos on target or not")
 
+flags.DEFINE_bool('global_norm', default=False,
+                  help="global normalization")
+
 
 def get_tfexample_decoder_examples():
     """Return tf dataset parser for examples."""
@@ -205,25 +208,26 @@ def get_activations(model, data):
 
     return activations
 
+def get_score(v1, v2):
+    score = torch.dot(v1, v2).item()**2
+    norms = (torch.linalg.norm(v1)**2, torch.linalg.norm(v2)**2)
+    return (score, norms)
 
-def get_scores(vectors1, vectors2, f=lambda x: x):
+def get_scores(vectors1, vectors2):
     """Get dot product of dictionary of vectors with a preprocesser function f"""
-    return {k: torch.dot(f(v), f(vectors2[k])).item() for k, v in vectors1.items()}
+    return {k: get_score(v, vectors2[k]) for k, v in vectors1.items()}
 
 
 def get_all_scores_for_model(model, query, abstracts, encoder):
     """Get both cosine and uncosine scores for all the abstracts"""
     query_grad = encoder(model, query)
     scores = []
-    nscores = []
     for i, abstract in enumerate(abstracts):
         abstract_grad = encoder(model, abstract)
         score = get_scores(query_grad, abstract_grad)
         scores.append(score)
-        nscore = get_scores(query_grad, abstract_grad, f=f_normalize)
-        nscores.append(nscore)
         del abstract_grad
-    return scores, nscores
+    return scores
 
 
 def merge_model_scores(scores):
@@ -231,9 +235,11 @@ def merge_model_scores(scores):
     assert len(scores) > 0
     abstract_scores = []
     for j in range(len(scores[0])):
-            abstract_scores.append(
-                {k: np.mean([s[j][k] for s in scores])  # Mean over checkpoints
-                                    for k, _ in scores[0][j].items()})
+        abstract_scores.append(
+            {k: (np.sum([s[j][k][0] for s in scores]),
+                 (np.sum([s[j][k][1][0] for s in scores]),
+                  np.sum([s[j][k][1][1] for s in scores]))) for k, _ in scores[0][j].items()}
+        )
     return abstract_scores
 
 
@@ -254,25 +260,21 @@ def get_all_scores(models, tokenizer, query, abstracts):
     """
     query = tokenize(tokenizer, query)
     abstracts = [tokenize(tokenizer, a) for a in abstracts]
-    all_scores = {'dot': {}, 'cosine': {}}
+    all_scores = {'dot': {}}
     
     for encoder in (get_gradients, get_activations):
         if encoder == get_activations:
-            score, nscore = get_all_scores_for_model(models[-1], query, abstracts, encoder)
+            score = get_all_scores_for_model(models[-1], query, abstracts, encoder)
         else:
             scores = []
-            nscores = []
             for model in models[:-1]:
-                score, nscore = get_all_scores_for_model(model, query, abstracts, encoder)
+                score = get_all_scores_for_model(model, query, abstracts, encoder)
                 scores.append(score)
-                nscores.append(nscore)
             score = merge_model_scores(scores)
-            nscore = merge_model_scores(nscores)
        
         all_scores['dot'] = merge_new_scores_to_dict(all_scores['dot'], score)
-        all_scores['cosine'] = merge_new_scores_to_dict(all_scores['cosine'], nscore)
    
-    return all_scores
+    return all_scores['dot']
 
 
 def collapse_abstracts_and_scores(scores, abstracts):
@@ -294,7 +296,7 @@ def collapse_abstracts_and_scores(scores, abstracts):
     return np.array(uri_scores), [abstracts[j] for j in uri_indices]
     
 
-def rerank_with_scores(abstracts, layer_scores, layers=None, collapse=False):
+def rerank_with_scores(abstracts, layer_scores, layers=None, collapse=False, normalize=False):
     """Given layers prefixes we sum scores of these layers and rerank the abstracts"""
     abstract_scores = []
     if layers is not None:
@@ -305,7 +307,14 @@ def rerank_with_scores(abstracts, layer_scores, layers=None, collapse=False):
         sumk = layer_scores[0].keys()
 
     for layer_score in layer_scores:
-        abstract_scores.append(np.sum([layer_score[k] for k in sumk]))
+        value = np.sum([layer_score[k][0] for k in sumk])
+        if normalize:
+            norm1 = np.sum([layer_score[k][1][0] for k in sumk])
+            norm2 = np.sum([layer_score[k][1][1] for k in sumk])
+            norm = np.sqrt(norm1) * np.sqrt(norm2)
+            value = value / norm
+            
+        abstract_scores.append(value)
 
     scores = np.array(abstract_scores)
     # merge abstracts and scores here
@@ -398,7 +407,7 @@ def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_
                     if config_name not in result[method]:
                         result[method][config_name] = []
             
-                    abstracts_config, scores_config = rerank_with_scores(abstracts, scores[k], layers=config, collapse=collapse)
+                    abstracts_config, scores_config = rerank_with_scores(abstracts, scores, layers=config, collapse=collapse, normalize = k=='cosine')
                                
                     precision, recall, rr = evaluate(query, abstracts_config, sample['fact_abstracts'], only_target_abstracts=only_target_abstracts, collapse=collapse)
 
