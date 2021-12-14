@@ -40,6 +40,9 @@ flags.DEFINE_string('hashmap_file', default=None,
 flags.DEFINE_string('output_file', default=None,
                     help='output file path to writer neighbours')
 
+flags.DEFINE_bool('target_only', default=False,
+                   help='targets abstracts only')
+
 
 def get_tfexample_decoder():
     """Returns tf dataset parser."""
@@ -146,7 +149,10 @@ def main(_):
             if len(facts_abstracts) == 0:
                 continue
 
-            distractors = [a for a in abstracts if a['targets_pretokenized'] == example['targets_pretokenized']][:100] + np.random.choice(abstracts, 100, replace=False).tolist()
+            if FLAGS.target_only:
+                distractors = [a for a in abstracts if a['targets_pretokenized'] == example['targets_pretokenized']][:200] # + np.random.choice(abstracts, 100, replace=False).tolist()
+            else:
+                distractors = [a for a in abstracts if a['targets_pretokenized'] == example['targets_pretokenized']][:100] + np.random.choice(abstracts, 100, replace=False).tolist()
 
             metrics['samples'].append({"example": example,
                                        "precision": precision,

@@ -56,6 +56,9 @@ flags.DEFINE_bool('only_corrects', default=False,
 flags.DEFINE_bool('only_wrongs', default=False,
                   help="evaluate only on wrong predicted examples")
 
+flags.DEFINE_bool('only_learned', default=False,
+                  help="evaluate only learned examples")
+
 flags.DEFINE_bool('only_target_abstracts', default=False,
                   help="only count same target abstracts as correct")
 
@@ -176,8 +179,7 @@ def get_gradients(model, data):
     model(input_ids=data['inputs'].cuda(model.cuda_no),
           labels=data['targets'].cuda(model.cuda_no)).loss.backward()
    
-    grad = {("gradients." + name): param.grad.detach().flatten() 
-                                for name, param in model.named_parameters()}
+    grad = {("gradients." + name): param.grad.detach().clone().flatten() for name, param in model.named_parameters()}
 
     return grad
 
@@ -192,12 +194,12 @@ def get_activations(model, data):
                        )
        
         for i, state in enumerate(output.encoder_hidden_states):
-            activations[f'activations.encoder.block.{i}'] = state.sum(dim=1).squeeze()
+            activations[f'activations.encoder.block.{i}'] = state.mean(dim=1).squeeze()
 
         del output.encoder_hidden_states
 
         for i, state in enumerate(output.decoder_hidden_states):
-            activations[f'activations.decoder.block.{i}'] = state.sum(dim=1).squeeze()
+            activations[f'activations.decoder.block.{i}'] = state.mean(dim=1).squeeze()
 
         del output
 
@@ -569,6 +571,9 @@ def main(_):
                                 tokenizer,
                                 samples,
                                 beam_size=FLAGS.beam_size)
+    
+
+    
    
     logging.info(f"Mean accuracy of last checkpoint is {np.mean(labels)}")
    
@@ -578,9 +583,19 @@ def main(_):
         samples = [samples[i] for i in range(len(labels)) if labels[i]]
         original_result['samples'] = samples
         
-    if FLAGS.only_wrongs:
+    elif FLAGS.only_wrongs:
         samples = [samples[i] for i in range(len(labels)) if not labels[i]]
         original_result['samples'] = samples
+        
+    elif FLAGS.only_learned:    
+        labels_zero = get_model_accuracy(models[0],  # Last checkpoint is the best accuracy.
+                                         tokenizer,
+                                         samples,
+                                         beam_size=FLAGS.beam_size)
+    
+        samples = [samples[i] for i in range(len(labels)) if labels[i] and not labels_zero[i]]
+        original_result['samples'] = samples
+        
         
     logging.info(f"Original average scores: {(original_result['precision'], original_result['recall'], original_result['mrr'])}")
     

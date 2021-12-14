@@ -41,6 +41,9 @@ flags.DEFINE_integer('batch_size', default=10,
 flags.DEFINE_integer('topk', default=100,
                      help='batch size to process at once')
 
+flags.DEFINE_bool('target_only', default=False,
+                  help='targets abstracts only')
+
 
 def get_tfexample_decoder_examples():
     """Returns tf dataset parser."""
@@ -92,10 +95,29 @@ def get_tokenized_query(record):
     return q
 
 
+def get_target_equivalence_classes(abstracts):
+    target_equivariance_indices = {}
+    for (i, abstract) in enumerate(abstracts):
+        target = abstract[1].decode().replace('<extra_id_0> ', '').strip().lower()
+        if target in target_equivariance_indices:
+            target_equivariance_indices[target].append(i)
+        else:
+            target_equivariance_indices[target] = [i]
+    return target_equivariance_indices
+
+
+def get_target_ids(target_ids_hashmap, record):
+    target = record[1].decode().replace('<extra_id_0> ', '').strip().lower()
+    return target_ids_hashmap.get(target, [0])
+
+
 def main(_):
     abstract_dataset = tf.data.TFRecordDataset(FLAGS.abstract_file)
     abstracts = load_dataset_from_tfrecord(abstract_dataset)
     print("abstracts loaded")
+    if FLAGS.target_only:
+        target_ids_hashmap = get_target_equivalence_classes(abstracts)
+        
     corpus = [get_tokenized_query(a) for a in abstracts]
     bm25 = BM25Plus(corpus)
 
@@ -105,11 +127,18 @@ def main(_):
     with open(FLAGS.output_file, "w") as f:
         for example in tqdm(test_loader):
             query = get_tokenized_query(example)
-            scores = bm25.get_scores(query)
-            idxs = np.argsort(-scores)[:FLAGS.topk]
-            scores = [scores[i] for i in idxs]
-            line = {'scores': scores,
-                    'neighbor_ids': idxs.tolist()}
+            if FLAGS.target_only:
+                target_ids = np.array(get_target_ids(target_ids_hashmap, example))
+                scores = np.array(bm25.get_batch_scores(query, target_ids))
+                idxs = np.argsort(-scores)[:FLAGS.topk]
+                scores = scores[idxs].tolist()
+                idxs = target_ids[idxs].tolist()           
+            else:
+                scores = bm25.get_scores(query)
+                idxs = np.argsort(-scores)[:FLAGS.topk].tolist()
+                scores = [scores[i] for i in idxs]
+                
+            line = {'scores': scores, 'neighbor_ids': idxs}
             print(json.dumps(line), file=f)
 
 if __name__ == '__main__':

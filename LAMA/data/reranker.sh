@@ -12,13 +12,13 @@ metric_output_file=metrics/bm25/bm25plus_metrics_v2.json
 
 
 T5_PREFIX=T5_checkpoints/1000000/model/pytorch_model_
-CUDA_VISIBLE_DEVICES=8,9,10
+CUDA_VISIBLE_DEVICES=8,9,10,11
 
-# source /raid/lingo/akyurek/gitother/fewshot_lama/setup.sh
+#source /raid/lingo/akyurek/gitother/fewshot_lama/setup.sh
 
 # python -u evaluate.py \
 # --abstract_uri_list ${uri_file} \
-# --abstract_file ${abstract_file} \.sh
+# --abstract_file ${abstract_file} \
 # --test_data ${test_file}  \
 # --hashmap_file ${hashmap_file} \
 # --nn_list_file ${nn_output_file} \
@@ -27,18 +27,20 @@ CUDA_VISIBLE_DEVICES=8,9,10
 # deactivate
 
 #checkpoint_folders=${T5_PREFIX}5100.bin,${T5_PREFIX}10200.bin,${T5_PREFIX}15300.bin,${T5_PREFIX}1000000.bin
-checkpoint_folders=${T5_PREFIX}5100.bin,${T5_PREFIX}10200.bin,${T5_PREFIX}1000000.bin
+
+checkpoint_folders=${T5_PREFIX}5100.bin,${T5_PREFIX}10200.bin,${T5_PREFIX}15300.bin,${T5_PREFIX}1000000.bin
 eval "$(conda shell.bash hook)"
 conda activate transformers
 
 for eos in "eos" "no_eos"; do
-  for subset in "corrects" "all";do    
-      output_metric_prefix=metrics/reranker/bm25plusv3_multi_${eos}_${target}_${subset}
+  for subset in "learned" "corrects";do    
+      output_metric_prefix=metrics/reranker/bm25plusv2_4ckpt_mean_multi_${eos}_${target}_${subset}
       params=("--metrics_file=${metric_output_file}" "--hashmap_file=${hashmap_file}" "--checkpoint_folders=${checkpoint_folders}" "--output_metrics_prefix=${output_metric_prefix}")
       [[ $eos == "eos" ]] && params+=(--include_eos)
       [[ $subset == "corrects" ]] && params+=(--only_corrects)
       [[ $subset == "wrongs" ]] && params+=(--only_wrongs)
-      python -u reranker_copy.py "${params[@]}"  > ${output_metric_prefix}.log 2> ${output_metric_prefix}.err
+      [[ $subset == "learned" ]] && params+=(--only_learned)
+      python -u reranker.py "${params[@]}"  > ${output_metric_prefix}.log 2> ${output_metric_prefix}.err
     done
 done
 
