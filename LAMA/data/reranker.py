@@ -209,8 +209,8 @@ def get_activations(model, data):
     return activations
 
 def get_score(v1, v2):
-    score = torch.dot(v1, v2).item()**2
-    norms = (torch.linalg.norm(v1)**2, torch.linalg.norm(v2)**2)
+    score = torch.dot(v1, v2).item()
+    norms = ((torch.linalg.norm(v1)**2).item(), (torch.linalg.norm(v2)**2).item())
     return (score, norms)
 
 def get_scores(vectors1, vectors2):
@@ -238,7 +238,8 @@ def merge_model_scores(scores):
         abstract_scores.append(
             {k: (np.sum([s[j][k][0] for s in scores]),
                  (np.sum([s[j][k][1][0] for s in scores]),
-                  np.sum([s[j][k][1][1] for s in scores]))) for k, _ in scores[0][j].items()}
+                  np.sum([s[j][k][1][1] for s in scores])))
+             for k, _ in scores[0][j].items()}
         )
     return abstract_scores
 
@@ -260,21 +261,27 @@ def get_all_scores(models, tokenizer, query, abstracts):
     """
     query = tokenize(tokenizer, query)
     abstracts = [tokenize(tokenizer, a) for a in abstracts]
-    all_scores = {'dot': {}}
+    all_scores = {}
     
     for encoder in (get_gradients, get_activations):
         if encoder == get_activations:
-            score = get_all_scores_for_model(models[-1], query, abstracts, encoder)
+            score = get_all_scores_for_model(models[-1],
+                                             query,
+                                             abstracts,
+                                             encoder)
         else:
             scores = []
             for model in models[:-1]:
-                score = get_all_scores_for_model(model, query, abstracts, encoder)
+                score = get_all_scores_for_model(model,
+                                                 query,
+                                                 abstracts,
+                                                 encoder)
                 scores.append(score)
             score = merge_model_scores(scores)
        
-        all_scores['dot'] = merge_new_scores_to_dict(all_scores['dot'], score)
+        all_scores = merge_new_scores_to_dict(all_scores, score)
    
-    return all_scores['dot']
+    return all_scores
 
 
 def collapse_abstracts_and_scores(scores, abstracts):
@@ -421,7 +428,7 @@ def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_
                             "nn_scores": scores_config[:100].tolist(),
                         })
                     else:
-                        logging.warning(f"metrcics are none in method: {method}")
+                        logging.warning(f"metrics are none in method: {method}")
 
     metrics = {'cosine': {}, 'dot': {}}
     for k, result in results.items():
