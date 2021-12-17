@@ -12,7 +12,7 @@ metric_output_file=metrics/bm25/bm25plus_metrics_v2.json
 
 
 T5_PREFIX=T5_checkpoints/1000000/model/pytorch_model_
-CUDA_VISIBLE_DEVICES=12,13,14,15
+CUDA_VISIBLE_DEVICES=0,1,2,3
 
 #source /raid/lingo/akyurek/gitother/fewshot_lama/setup.sh
 
@@ -35,13 +35,13 @@ conda activate transformers
 
 for eos in "eos" "no_eos"; do
   for subset in "learned" "corrects" "wrongs";do    
-      output_metric_prefix=metrics/reranker/bm25plusv2_4ckpt_global_norm_mean_multi_${eos}_${target}_${subset}
+      output_metric_prefix=metrics/reranker/bm25plusv2_4ckpt_local_norm_mean_multi_${eos}_${target}_${subset}
       params=("--metrics_file=${metric_output_file}" "--hashmap_file=${hashmap_file}" "--checkpoint_folders=${checkpoint_folders}" "--output_metrics_prefix=${output_metric_prefix}")
       [[ $eos == "eos" ]] && params+=(--include_eos)
       [[ $subset == "corrects" ]] && params+=(--only_corrects)
       [[ $subset == "wrongs" ]] && params+=(--only_wrongs)
       [[ $subset == "learned" ]] && params+=(--only_learned)
-      python -u reranker.py "${params[@]}"  > ${output_metric_prefix}.log 2> ${output_metric_prefix}.err
+      python -u reranker_local_norm.py "${params[@]}"  > ${output_metric_prefix}.log 2> ${output_metric_prefix}.err
     done
 done
 
