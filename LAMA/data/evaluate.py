@@ -1,14 +1,11 @@
-import os
 import json
-import functools
 from absl import app
 from absl import flags
-from absl import logging
 import numpy as np
 import random
-import pdb
-
 import tensorflow as tf
+
+
 try:
     # Disable all GPUS
     tf.config.set_visible_devices([], 'GPU')
@@ -43,6 +40,9 @@ flags.DEFINE_string('output_file', default=None,
 flags.DEFINE_bool('target_only', default=False,
                    help='targets abstracts only')
 
+flags.DEFINE_bool('only_masked_sentence', default=False,
+                  help='convert abstracts to single sentence by extracting only the masked sentence')
+
 
 def get_tfexample_decoder():
     """Returns tf dataset parser."""
@@ -69,6 +69,22 @@ def load_examples_from_tf_records(file):
     dataset = tf.data.TFRecordDataset(file)
     ds = dataset.map(get_tfexample_decoder()).as_numpy_iterator()
     return [{k: v.decode() for k, v in datum.items()} for datum in ds]
+
+
+def extract_masked_sentence(abstract: str, term='<extra_id_0>'):
+    term_start = abstract.find(term)
+    assert term_start > -1
+    term_end = term_start + len(term)
+    sentence_start = abstract.rfind('. ', 0, term_start)
+    if sentence_start == -1:
+        sentence_start = 0
+    else:
+        sentence_start += 2
+    sentence_end = abstract.find('. ', term_end)
+    if sentence_end == -1:
+        sentence_end = abstract.find('.', term_end)
+    sentence_end = min(sentence_end + 1, len(abstract))
+    return abstract[sentence_start:sentence_end]
 
 
 def precision_recall(nearest_ids, correct_ids, ks=(1, 5, 10, 50, 100)):
@@ -105,7 +121,10 @@ def main(_):
         abstracts = []
         with open(FLAGS.abstract_file, 'r') as f:
             for line in f:
-                abstracts.append(json.loads(line))
+                abstract = json.loads(line)
+                if FLAGS.only_masked_sentence:
+                    abstract['inputs_pretokenized'] = extract_masked_sentence(abstract['inputs_pretokenized'])
+                abstracts.append(abstract)
         assert ([a['page_uri'] for a in abstracts] == uri_list).all()
         abstracts = np.array(abstracts)
 

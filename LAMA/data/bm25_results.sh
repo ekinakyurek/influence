@@ -6,16 +6,16 @@ hashmap_file=${lama_root}/abstracts/hashmap_used.json
 test_file=${lama_root}/all.tfrecord
 abstract_json_file=${lama_root}/abstracts/all_used.jsonl
 
-nn_output_file=nns/bm25/bm25plus_nn_results_v2_target_only.jsonl
-metric_output_file=metrics/bm25/bm25plus_metrics_v2_target_only.json
+nn_output_file=nns/bm25/bm25plus_nn_results_v2_sentence_level.jsonl
+metric_output_file=metrics/bm25/bm25plus_metrics_v2_sentence_level.json
 
 
 python get_nns_bm25.py \
   --abstract_file ${abstract_file} \
   --test_file ${test_file} \
   --output_file ${nn_output_file} \
-  --target_only \
-  --topk 100 \
+  --only_masked_sentence \
+  --topk 100
 
 python evaluate.py \
   --abstract_uri_list ${uri_file} \
@@ -23,5 +23,4 @@ python evaluate.py \
   --test_data ${test_file}  \
   --hashmap_file ${hashmap_file} \
   --nn_list_file ${nn_output_file} \
-  --target_only \
   --output_file ${metric_output_file}
