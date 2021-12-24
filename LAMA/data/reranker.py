@@ -45,7 +45,7 @@ flags.DEFINE_string('layers', default=None,  # 'encoder/block/0'
                     help='layers used in reranking (deprecated)')
 
 flags.DEFINE_string('hashmap_file', default=None,
-                    help='hashmap that maps relation,obj,subj->page_uris')
+                    help='hashmap that maps relation,obj,subj->sentence_uris')
 
 flags.DEFINE_integer('beam_size', default=3,
                      help="beam size for accuracy calculations")
@@ -98,8 +98,11 @@ def get_tfexample_decoder_abstracts():
         'targets_pretokenized': tf.io.FixedLenFeature([], tf.string),
         'masked_uri': tf.io.FixedLenFeature([], tf.string),
         'page_uri': tf.io.FixedLenFeature([], tf.string),
-       }
-
+        'masked_type': tf.io.FixedLenFeature([], tf.string),
+        'facts': tf.io.FixedLenFeature([], tf.string),
+        'sentence_uris': tf.io.FixedLenFeature([], tf.string),
+    }
+    
     def _parse_data(proto):
         data = tf.io.parse_single_example(proto, feature_dict)
         return data  # (data['inputs_pretokenized'], data['targets_pretokenized'])
@@ -148,9 +151,9 @@ def f_normalize(x):
 
 def check_equal(a1, a2, collapse):
     if collapse:
-        return a1['page_uri'] == a2['page_uri']
+        return a1['sentence_uris'] == a2['sentence_uris']
     else:
-        return a1['page_uri'] == a2['page_uri'] and a1['targets_pretokenized'] == a2['targets_pretokenized']
+        return a1['sentence_uris'] == a2['sentence_uris'] and a1['targets_pretokenized'] == a2['targets_pretokenized']
 
 
 def check_correct(a1, fact_abstracts, collapse):
@@ -287,7 +290,7 @@ def get_all_scores(models, tokenizer, query, abstracts):
 def collapse_abstracts_and_scores(scores, abstracts):
     uri_to_indices = {}
     for i, a in enumerate(abstracts):
-        uri = a['page_uri']
+        uri = a['sentence_uris']
         if uri in uri_to_indices:
             uri_to_indices[uri].append(i)
         else:
@@ -343,7 +346,7 @@ def evaluate(example, abstracts, fact_abstracts, only_target_abstracts=False, co
         fact_abstracts = list(filter(lambda a: a['targets_pretokenized'] == example['targets_pretokenized'], fact_abstracts))
         
     if collapse:
-        identifier = lambda x: x['page_uri']
+        identifier = lambda x: x['sentence_uris']
         _, idxs = np.unique(list(map(identifier, fact_abstracts)), return_index=True)
         fact_abstracts = [fact_abstracts[id] for id in idxs]
 

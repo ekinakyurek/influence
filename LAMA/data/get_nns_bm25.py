@@ -71,6 +71,9 @@ def get_tfexample_decoder_abstracts():
         'targets_pretokenized': tf.io.FixedLenFeature([], tf.string),
         'masked_uri': tf.io.FixedLenFeature([], tf.string),
         'page_uri': tf.io.FixedLenFeature([], tf.string),
+        'masked_type': tf.io.FixedLenFeature([], tf.string),
+        'facts': tf.io.FixedLenFeature([], tf.string),
+        'sentence_uris': tf.io.FixedLenFeature([], tf.string),
        }
 
     def _parse_data(proto):

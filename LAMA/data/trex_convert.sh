@@ -14,4 +14,4 @@ for f in ${input_folder}/P*jsonl; do
 #   shard_no=$(($shard_no + 1))
 done
 
-#python extract_abstracts.py --input_folder ${input_folder} --abstract_file original_trex/all.jsonl
+python extract_abstracts.py --input_folder ${input_folder} --abstract_file original_trex/all.jsonl
