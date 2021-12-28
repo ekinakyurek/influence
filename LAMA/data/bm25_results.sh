@@ -10,11 +10,11 @@ nn_output_file=nns/bm25/bm25plus_nn_results_v3_sentence_level.jsonl
 metric_output_file=metrics/bm25/bm25plus_metrics_v3_sentence_level.json
 
 
-python get_nns_bm25.py \
-  --abstract_file ${abstract_file} \
-  --test_file ${test_file} \
-  --output_file ${nn_output_file} \
-  --topk 100
+# python get_nns_bm25.py \
+#   --abstract_file ${abstract_file} \
+#   --test_file ${test_file} \
+#   --output_file ${nn_output_file} \
+#   --topk 100
 
 python evaluate.py \
   --abstract_uri_list ${uri_file} \

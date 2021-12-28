@@ -417,7 +417,7 @@ def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_
                     if config_name not in result[method]:
                         result[method][config_name] = []
             
-                    abstracts_config, scores_config = rerank_with_scores(abstracts, scores, layers=config, collapse=collapse, normalize = k=='cosine')
+                    abstracts_config, scores_config = rerank_with_scores(abstracts, scores, layers=config, collapse=collapse, normalize=(k == 'cosine'))
                                
                     precision, recall, rr = evaluate(query, abstracts_config, sample['fact_abstracts'], only_target_abstracts=only_target_abstracts, collapse=collapse)
 

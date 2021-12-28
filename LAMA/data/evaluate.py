@@ -125,7 +125,7 @@ def main(_):
                 if FLAGS.only_masked_sentence:
                     abstract['inputs_pretokenized'] = extract_masked_sentence(abstract['inputs_pretokenized'])
                 abstracts.append(abstract)
-        assert ([a['page_uri'] for a in abstracts] == uri_list).all()
+        assert ([a['sentence_uris'] for a in abstracts] == uri_list).all()
         abstracts = np.array(abstracts)
 
     assert len(nns) == len(examples)

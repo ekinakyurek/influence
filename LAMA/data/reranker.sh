@@ -6,13 +6,13 @@ hashmap_file=${lama_root}/abstracts/hashmap_used.json
 test_file=${lama_root}/all.tfrecord
 abstract_file=${lama_root}/abstracts/all_used.jsonl
 
-nn_output_file=nns/bm25/bm25plus_nn_results_v2_sentence_level.jsonl
-metric_output_file=metrics/bm25/bm25plus_metrics_v2_sentence_level.json
+nn_output_file=nns/bm25/bm25plus_nn_results_v3_sentence_level.jsonl
+metric_output_file=metrics/bm25/bm25plus_metrics_v3_sentence_level.json
 
 
 
 T5_PREFIX=T5_checkpoints/1000000/model/pytorch_model_
-CUDA_VISIBLE_DEVICES=0,1,2,3
+CUDA_VISIBLE_DEVICES=1,8,10,11
 
 #source /raid/lingo/akyurek/gitother/fewshot_lama/setup.sh
 
@@ -35,7 +35,7 @@ conda activate transformers
 
 for eos in "eos" "no_eos"; do
   for subset in "learned" "corrects" "wrongs";do    
-      output_metric_prefix=metrics/reranker/bm25plusv2_4ckpt_ln_sentence_level_${eos}_${target}_${subset}
+      output_metric_prefix=metrics/reranker/bm25plusv3_4ckpt_ln_sentence_level_${eos}_${target}_${subset}
       params=("--metrics_file=${metric_output_file}" "--hashmap_file=${hashmap_file}" "--checkpoint_folders=${checkpoint_folders}" "--output_metrics_prefix=${output_metric_prefix}")
       [[ $eos == "eos" ]] && params+=(--include_eos)
       [[ $subset == "corrects" ]] && params+=(--only_corrects)
