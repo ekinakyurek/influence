@@ -1,11 +1,14 @@
+import os
 import json
+import functools
 from absl import app
 from absl import flags
+from absl import logging
 import numpy as np
 import random
+import pdb
+
 import tensorflow as tf
-
-
 try:
     # Disable all GPUS
     tf.config.set_visible_devices([], 'GPU')
@@ -37,15 +40,6 @@ flags.DEFINE_string('hashmap_file', default=None,
 flags.DEFINE_string('output_file', default=None,
                     help='output file path to writer neighbours')
 
-flags.DEFINE_bool('target_only', default=False,
-                   help='targets abstracts only')
-
-flags.DEFINE_bool('only_masked_sentence', default=False,
-                  help='convert abstracts to single sentence by extracting only the masked sentence')
-
-
-K_EVALS = (1, 3, 5, 10, 25)
-
 
 def get_tfexample_decoder():
     """Returns tf dataset parser."""
@@ -74,23 +68,7 @@ def load_examples_from_tf_records(file):
     return [{k: v.decode() for k, v in datum.items()} for datum in ds]
 
 
-def extract_masked_sentence(abstract: str, term='<extra_id_0>'):
-    term_start = abstract.find(term)
-    assert term_start > -1
-    term_end = term_start + len(term)
-    sentence_start = abstract.rfind('. ', 0, term_start)
-    if sentence_start == -1:
-        sentence_start = 0
-    else:
-        sentence_start += 2
-    sentence_end = abstract.find('. ', term_end)
-    if sentence_end == -1:
-        sentence_end = abstract.find('.', term_end)
-    sentence_end = min(sentence_end + 1, len(abstract))
-    return abstract[sentence_start:sentence_end]
-
-
-def precision_recall(nearest_ids, correct_ids, ks=K_EVALS):
+def precision_recall(nearest_ids, correct_ids, ks=(1, 5, 10, 50, 100)):
     precision, recall = {}, {}
     for k in ks:
         nn_k = nearest_ids[:k]
@@ -124,12 +102,10 @@ def main(_):
         abstracts = []
         with open(FLAGS.abstract_file, 'r') as f:
             for line in f:
-                abstract = json.loads(line)
-                if FLAGS.only_masked_sentence:
-                    abstract['inputs_pretokenized'] = extract_masked_sentence(abstract['inputs_pretokenized'])
-                abstracts.append(abstract)
-        assert ([a['sentence_uris'] for a in abstracts] == uri_list).all()
+                abstracts.append(json.loads(line))
+        assert ([a['page_uri'] for a in abstracts] == uri_list).all()
         abstracts = np.array(abstracts)
+
 
     assert len(nns) == len(examples)
     assert max([max(nn['neighbor_ids']) for nn in nns]) < len(uri_list)
@@ -158,12 +134,12 @@ def main(_):
         counted += 1
         precision, recall = precision_recall(nn_ids,
                                              uris,
-                                             ks=K_EVALS)
+                                             ks=(1, 5, 10, 50, 100))
 
         precisions.append(precision)
         recalls.append(recall)
         rrs.append(reciprocal_rank(nn_ids, uris))
-        if len(metrics['samples']) < 10000 and FLAGS.abstract_file is not None:
+        if len(metrics['samples']) < 100 and FLAGS.abstract_file is not None:
             facts_abstracts = []
             for uri in uris:
                 ids_w_uri = np.where(uri_list == uri)[0]
@@ -171,10 +147,7 @@ def main(_):
             if len(facts_abstracts) == 0:
                 continue
 
-            if FLAGS.target_only:
-                distractors = [a for a in abstracts if a['targets_pretokenized'] == example['targets_pretokenized']][:200] # + np.random.choice(abstracts, 100, replace=False).tolist()
-            else:
-                distractors = [a for a in abstracts if a['targets_pretokenized'] == example['targets_pretokenized']][:100] + np.random.choice(abstracts, 100, replace=False).tolist()
+            distractors = [a for a in abstracts if a['targets_pretokenized'] == example['targets_pretokenized']][:100] + np.random.choice(abstracts, 100, replace=False).tolist()
 
             metrics['samples'].append({"example": example,
                                        "precision": precision,
@@ -185,7 +158,8 @@ def main(_):
                                        "fact_abstracts": facts_abstracts,
                                        "distractors":  distractors})
 
-    for k in K_EVALS:
+
+    for k in (1, 5, 10,  50, 100):
         metrics['precision'][k] = np.mean([p[k] for p in precisions])
         metrics['recall'][k] = np.mean([r[k] for r in recalls])
     metrics['mrr'] = np.mean(rrs)

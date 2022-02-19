@@ -1,4 +1,6 @@
+from dataclasses import dataclass
 import json
+from typing import Optional, Sequence, Mapping
 from numpy.lib.function_base import average
 import torch  # TODO(ekina): make this jax
 import torch.nn.functional as F
@@ -11,6 +13,7 @@ from transformers import MT5ForConditionalGeneration, T5Tokenizer
 import random
 import tensorflow as tf
 import copy
+from dataclasses import dataclass, field
 # import pdb
 
 try:
@@ -47,8 +50,14 @@ flags.DEFINE_string('layers', default=None,  # 'encoder/block/0'
 flags.DEFINE_string('hashmap_file', default=None,
                     help='hashmap that maps relation,obj,subj->sentence_uris')
 
+flags.DEFINE_string('exp_type', default='layers', 
+                    help="exp type either layers or linear combination")
+
 flags.DEFINE_integer('beam_size', default=3,
                      help="beam size for accuracy calculations")
+
+flags.DEFINE_integer('seed', default=10,
+                     help="seed")
 
 flags.DEFINE_bool('only_corrects', default=False,
                   help="evaluate only on correctly predicted examples")
@@ -65,8 +74,25 @@ flags.DEFINE_bool('only_target_abstracts', default=False,
 flags.DEFINE_bool('include_eos', default=False,
                   help="include eos on target or not")
 
-flags.DEFINE_bool('global_norm', default=False,
-                  help="global normalization")
+flags.DEFINE_bool('load_accums', default=False,
+                  help="load_accumulators")
+
+flags.DEFINE_string('samples_from_exp', default=None,
+                  help="exp json to read samples")
+
+K_EVALS = (1, 3, 5, 10, 25)
+
+
+@dataclass
+class LayerConfig:
+    layer_prefixes: Sequence[str]
+    layer_weights: Sequence[float] = field(default_factory=list)
+    index: Optional[int] = 0
+    
+    def __post_init__(self):
+        if len(self.layer_weights) == 0:
+            for prefix in self.layer_prefixes:
+                self.layer_weights.append(1.0)
 
 
 def get_tfexample_decoder_examples():
@@ -116,7 +142,7 @@ def load_dataset_from_tfrecord(dataset, load_fn):
     return [d for d in ds_loader]
 
 
-def tokenize(tokenizer, record):
+def tokenize(tokenizer: T5Tokenizer, record: Mapping):
     """Tokenize the inputs and targets of a record"""
     inputs = tokenizer(record['inputs_pretokenized'],
                        return_tensors='pt',
@@ -149,18 +175,18 @@ def f_normalize(x):
     return F.normalize(x, dim=0)
 
 
-def check_equal(a1, a2, collapse):
+def check_equal(a1: Mapping, a2: Mapping, collapse: bool):
     if collapse:
-        return a1['sentence_uris'] == a2['sentence_uris']
+        return get_sentence(a1) == get_sentence(a2)
     else:
-        return a1['sentence_uris'] == a2['sentence_uris'] and a1['targets_pretokenized'] == a2['targets_pretokenized']
+        return a1['sentence_uris'] == a2['sentence_uris']
 
 
-def check_correct(a1, fact_abstracts, collapse):
+def check_correct(a1: Mapping, fact_abstracts: Sequence[Mapping], collapse: bool):
     return any((check_equal(a1, a, collapse) for a in fact_abstracts))
 
 
-def precision_recall(abstracts, fact_abstracts, ks=(1, 5, 10, 50, 100), collapse=False):
+def precision_recall(abstracts: Sequence[Mapping], fact_abstracts: Sequence[Mapping], ks: Sequence[int] = K_EVALS, collapse=False):
     """Calculate precision and recall given nearest ids and correct ids"""
     precision, recall = {}, {}
     for k in ks:
@@ -170,7 +196,7 @@ def precision_recall(abstracts, fact_abstracts, ks=(1, 5, 10, 50, 100), collapse
     return precision, recall
 
 
-def reciprocal_rank(abstracts, fact_abstracts, collapse=False):
+def reciprocal_rank(abstracts: Sequence[Mapping], fact_abstracts: Sequence[Mapping], collapse: bool = False):
     """Return reciprocal rank score"""
     for i, a in enumerate(abstracts):
         if check_correct(a, fact_abstracts, collapse):
@@ -178,19 +204,23 @@ def reciprocal_rank(abstracts, fact_abstracts, collapse=False):
     return 0
 
 
-def get_gradients(model, data):
+def get_gradients(model: MT5ForConditionalGeneration, data: Mapping):
     """Get Mapping[layer, gradient] given input and targets"""
-    model.zero_grad()
+    for param in model.parameters():
+        param.grad = None
 
     model(input_ids=data['inputs'].cuda(model.cuda_no),
           labels=data['targets'].cuda(model.cuda_no)).loss.backward()
-   
-    grad = {("gradients." + name): param.grad.detach().clone().flatten() for name, param in model.named_parameters()}
+       
+    if FLAGS.load_accums:
+        grad = {("gradients." + name): param.grad.detach().flatten().div_(model.accums[name]) for name, param in model.named_parameters()}
+    else:
+        grad = {("gradients." + name): param.grad.detach().clone().flatten()  for name, param in model.named_parameters()}
 
     return grad
 
 
-def get_activations(model, data):
+def get_activations(model: MT5ForConditionalGeneration, data: Mapping):
     """Get Mapping[layer, activation] given input and targets"""
     activations = {}
     with torch.no_grad():
@@ -211,10 +241,13 @@ def get_activations(model, data):
 
     return activations
 
+
 def get_score(v1, v2):
     score = torch.dot(v1, v2).item()
-    norms = ((torch.linalg.norm(v1)**2).item(), (torch.linalg.norm(v2)**2).item())
+    norms = ((torch.linalg.norm(v1)**2).item(), 
+             (torch.linalg.norm(v2)**2).item())
     return (score, norms)
+
 
 def get_scores(vectors1, vectors2):
     """Get dot product of dictionary of vectors with a preprocesser function f"""
@@ -287,10 +320,16 @@ def get_all_scores(models, tokenizer, query, abstracts):
     return all_scores
 
 
-def collapse_abstracts_and_scores(scores, abstracts):
+def get_sentence(abstract):
+    targets = abstract['targets_pretokenized'].replace('<extra_id_0> ', '').strip()
+    sentence = abstract['inputs_pretokenized'].replace('<extra_id_0>', targets)
+    return sentence
+
+
+def collapse_abstracts_and_scores(scores: Sequence[float], abstracts: Sequence[Mapping]):
     uri_to_indices = {}
     for i, a in enumerate(abstracts):
-        uri = a['sentence_uris']
+        uri = get_sentence(a)
         if uri in uri_to_indices:
             uri_to_indices[uri].append(i)
         else:
@@ -306,21 +345,26 @@ def collapse_abstracts_and_scores(scores, abstracts):
     return np.array(uri_scores), [abstracts[j] for j in uri_indices]
     
 
-def rerank_with_scores(abstracts, layer_scores, layers=None, collapse=False, normalize=False):
+def rerank_with_scores(abstracts: Sequence[Mapping], layer_scores: Mapping, layers: Optional[LayerConfig] = None, collapse: bool = False, normalize: bool = False):
     """Given layers prefixes we sum scores of these layers and rerank the abstracts"""
     abstract_scores = []
     if layers is not None:
         # Assuming our layer configurations are prefix codes
-        inc = lambda key: any(key.startswith(layer) for layer in layers)
-        sumk = [key for key in layer_scores[0].keys() if inc(key)]
+        def findindex(key):
+            return np.where([key.startswith(layer)
+                             for layer in layers.layer_prefixes])[0]
+        
+        sum_names = [weight_name for weight_name in layer_scores[0].keys() if len(findindex(weight_name)) > 0]
+        w_weights = {weight_name: layers.layer_weights[findindex(weight_name)[0]] for weight_name in sum_names}
     else:
-        sumk = layer_scores[0].keys()
+        sum_names = list(layer_scores[0].keys())
+        w_weights = {k: 1.0 for k in sum_names}
 
     for layer_score in layer_scores:
-        value = np.sum([layer_score[k][0] for k in sumk])
+        value = np.sum([layer_score[k][0] * w_weights[k] for k in sum_names])
         if normalize:
-            norm1 = np.sum([layer_score[k][1][0] for k in sumk])
-            norm2 = np.sum([layer_score[k][1][1] for k in sumk])
+            norm1 = np.sum([layer_score[k][1][0] for k in sum_names])
+            norm2 = np.sum([layer_score[k][1][1] for k in sum_names])
             norm = np.sqrt(norm1) * np.sqrt(norm2)
             value = value / norm
             
@@ -346,7 +390,7 @@ def evaluate(example, abstracts, fact_abstracts, only_target_abstracts=False, co
         fact_abstracts = list(filter(lambda a: a['targets_pretokenized'] == example['targets_pretokenized'], fact_abstracts))
         
     if collapse:
-        identifier = lambda x: x['sentence_uris']
+        identifier = get_sentence
         _, idxs = np.unique(list(map(identifier, fact_abstracts)), return_index=True)
         fact_abstracts = [fact_abstracts[id] for id in idxs]
 
@@ -355,7 +399,7 @@ def evaluate(example, abstracts, fact_abstracts, only_target_abstracts=False, co
         return None, None, None
 
     # nn_ids = [a['page_uri'] for a in abstracts]
-    precision, recall = precision_recall(abstracts, fact_abstracts, ks=(1, 5, 10, 50, 100), collapse=collapse)
+    precision, recall = precision_recall(abstracts, fact_abstracts, ks=K_EVALS, collapse=collapse)
     rr = reciprocal_rank(abstracts, fact_abstracts, collapse=collapse)
     return precision, recall, rr
 
@@ -363,7 +407,7 @@ def evaluate(example, abstracts, fact_abstracts, only_target_abstracts=False, co
 def average_metrics(results):
     """Average the metrics over samples"""
     metrics = {'precision': {}, 'recall': {}}
-    for k in (1, 5, 10,  50, 100):
+    for k in K_EVALS:
         metrics['precision'][k] = np.mean([res['precision'][k] for res in results])
         metrics['recall'][k] = np.mean([res['recall'][k] for res in results])
     metrics['mrr'] = np.mean([res['rr'] for res in results])
@@ -371,17 +415,43 @@ def average_metrics(results):
     return metrics
 
 
-def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_layers=12):  # TODO: Read num_layers from models
-    """Runs reranking experiments for all configurations listed below and returns the results"""
-    layer_configs = [('gradients.shared',), ('gradients.',)]
-    layer_configs += [(f'gradients.encoder.block.{i}', f'gradients.decoder.block.{i}') for i in range(num_layers)]
-    layer_configs += [('gradients.shared', f'gradients.encoder.block.{i}', f'gradients.decoder.block.{i}') for i in range(num_layers)]
-    layer_configs += [(f'activations.encoder.block.{i}', f'activations.decoder.block.{i}') for i in range(num_layers + 1)]
-    layer_configs += [('activations.encoder.block.0', 'activations.decoder.block.0', f'activations.encoder.block.{i}', f'activations.decoder.block.{i}') for i in range(1, num_layers+1)]
-    layer_configs.append(('activations.', ))
-    layer_configs.append(('activations.', 'gradients.'))
-    layer_configs.append(('activations.encoder.block.0', 'activations.decoder.block.0', 'gradients.shared'))
+def get_all_layer_configs(num_layers=12, exp_type="layers"):
+    """Returns configurations listed below"""
+    if exp_type == "layers":
+        layer_configs = [LayerConfig(('gradients.shared',)), LayerConfig(('gradients.',))]
+        layer_configs += [LayerConfig((f'gradients.encoder.block.{i}', f'gradients.decoder.block.{i}')) for i in range(num_layers)]
+        layer_configs += [LayerConfig(('gradients.shared', f'gradients.encoder.block.{i}', f'gradients.decoder.block.{i}')) for i in range(num_layers)]
+        layer_configs += [LayerConfig((f'gradients.encoder.block.{i}', )) for i in range(num_layers)]
+        layer_configs += [LayerConfig(('gradients.shared', f'gradients.encoder.block.{i}')) for i in range(num_layers)]
+        layer_configs += [LayerConfig((f'activations.encoder.block.{i}', f'activations.decoder.block.{i}')) for i in range(num_layers + 1)]
+        layer_configs += [LayerConfig((f'activations.encoder.block.{i}',)) for i in range(num_layers + 1)]
+        layer_configs += [LayerConfig(('activations.encoder.block.0', 'activations.decoder.block.0', f'activations.encoder.block.{i}', f'activations.decoder.block.{i}')) for i in range(1, num_layers+1)]
+        layer_configs += [LayerConfig(('activations.encoder.block.0', f'activations.encoder.block.{i}', f'activations.decoder.block.{i}')) for i in range(1, num_layers+1)]
+        layer_configs.append(LayerConfig(('activations.', )))
+        layer_configs.append(LayerConfig(('activations.', 'gradients.')))
+        layer_configs.append(LayerConfig(('activations.encoder.block.0', 'activations.decoder.block.0', 'gradients.shared')))
+        layer_configs.append(LayerConfig(('activations.encoder.block.0', 'gradients.shared')))
+    else:
+        layer_configs = []
+        index = 0
+        for a in np.linspace(-5, 5, num=10):
+            for b in np.linspace(-5, 5, num=10):
+                layer_configs.append(LayerConfig(('activations.encoder.block.0', 'activations.decoder.block.0', 'gradients.shared'),
+                                                  [a, b, 1.0],
+                                                  index=index))
+                index += 1
+        for a in (0.0, 1.0):
+            for b in (0.0, 1.0):
+                layer_configs.append(LayerConfig(('activations.encoder.block.0', 'activations.decoder.block.0', 'gradients.shared'),
+                                                  [a, b, 1.0],
+                                                  index=index))
+                index += 1
+    return layer_configs
 
+def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_layers=12, exp_type="layers"):  # TODO: Read num_layers from models
+    """Runs reranking experiments for all configurations listed below and returns the results"""
+    layer_configs = get_all_layer_configs(num_layers, exp_type)
+    
     results = {'cosine': {}, 'dot': {}}
 
     for (i, sample) in tqdm(enumerate(samples)):
@@ -402,7 +472,7 @@ def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_
 
         for k, result in results.items():  # cosine or dot
             
-            for method in ('collapse', 'target_abstracts', 'full'):  # eval methods
+            for method in ('collapse', 'full'):  # eval methods
                 
                 if method not in result:
                     result[method] = {}
@@ -412,8 +482,11 @@ def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_
                                       
                 for config in layer_configs:
         
-                    config_name = ",".join(config)
+                    config_name = ",".join(config.layer_prefixes)
                     
+                    if exp_type != "layers":
+                        config_name = config_name + "_" + str(config.index)
+                                       
                     if config_name not in result[method]:
                         result[method][config_name] = []
             
@@ -429,6 +502,7 @@ def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_
                             "rr": rr,
                             "nn_abstracts": abstracts_config[:100],
                             "nn_scores": scores_config[:100].tolist(),
+                            "weights": config.layer_weights,
                         })
                     else:
                         logging.warning(f"metrics are none in method: {method}")
@@ -438,7 +512,7 @@ def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_
         for (method_name, res) in result.items():
             metrics[k][method_name] = {}
             for (config_name, r) in res.items():
-                average_result = average_metrics(r)
+                average_result = average_metrics(r)                
                 metrics[k][method_name][config_name] = average_result
                 print(config_name, "\t", method_name, '\t', k, '\t', average_result['mrr'])
 
@@ -563,12 +637,15 @@ def get_model_accuracy(model, tokenizer: T5Tokenizer, samples, beam_size=3):
     return np.array(labels)
 
 
+EPS=1e-7
+
+
 def main(_):
     for attr, flag_obj in FLAGS.__flags.items():
         print("--%s=%s" % (attr, flag_obj.value))
        
-    np.random.seed(10)
-    random.seed(10)
+    np.random.seed(FLAGS.seed)
+    random.seed(FLAGS.seed)
 
     original_result = json.load(open(FLAGS.metrics_file))
     hashmap = json.load(open(FLAGS.hashmap_file, 'r'))
@@ -580,41 +657,80 @@ def main(_):
         model = MT5ForConditionalGeneration.from_pretrained(
                                         folder,
                                         local_files_only=True).cuda(i)
+        
+        if FLAGS.load_accums:
+            print("loading_accums")
+            accum =  MT5ForConditionalGeneration.from_pretrained(
+                                        folder.replace("_model_", "_accum_"),
+                                        local_files_only=True)
+            model.accums = {}
+            for (k, v) in accum.named_parameters():
+                model.accums[k] = (torch.sqrt(v.data) + EPS).flatten().cuda(i)    
+
         model.eval()
         model.cuda_no = i
         models.append(model)
-
+    
     samples = original_result['samples']
+    
+    random.shuffle(samples)
+    
+    logging.info(f"Number of samples in original: {len(samples)}")
   
     labels = get_model_accuracy(models[-1],  # Last checkpoint is the best accuracy.
                                 tokenizer,
                                 samples,
                                 beam_size=FLAGS.beam_size)
     
-
     
-   
+    
+    
     logging.info(f"Mean accuracy of last checkpoint is {np.mean(labels)}")
    
     assert not (FLAGS.only_corrects and FLAGS.only_wrongs)
     
-    if FLAGS.only_corrects:
-        samples = [samples[i] for i in range(len(labels)) if labels[i]]
+    if FLAGS.samples_from_exp is not None:
+        with open(FLAGS.samples_from_exp) as f:
+            exp_metrics = json.load(f)
+        exp_inputs = [sample['example']['inputs_pretokenized'] 
+                    for sample in exp_metrics['dot']['full']['bm25plus']['samples']]
+        exp_uris = set(exp_inputs)
+        samples = [sample for sample in samples if sample['example']['inputs_pretokenized'] in exp_uris]
         original_result['samples'] = samples
+    else:
+        if FLAGS.only_corrects:
+            labels_zero = get_model_accuracy(models[0],
+                                            tokenizer,
+                                            samples,
+                                            beam_size=FLAGS.beam_size)
+            logging.info(f"Mean accuracy of first checkpoint is {np.mean(labels_zero)}")
+            samples = [samples[i] for i in range(len(labels_zero)) if labels_zero[i]]
+            original_result['samples'] = samples
+            
+        elif FLAGS.only_wrongs:
+            samples = [samples[i] for i in range(len(labels)) if not labels[i]]
+            original_result['samples'] = samples
+            
+        elif FLAGS.only_learned:    
+            labels_zero = get_model_accuracy(models[0],
+                                            tokenizer,
+                                            samples,
+                                            beam_size=FLAGS.beam_size)
+            
+            # labels_last = get_model_accuracy(models[-2],
+            #                                  tokenizer,
+            #                                  samples,
+            #                                  beam_size=FLAGS.beam_size)
         
-    elif FLAGS.only_wrongs:
-        samples = [samples[i] for i in range(len(labels)) if not labels[i]]
-        original_result['samples'] = samples
-        
-    elif FLAGS.only_learned:    
-        labels_zero = get_model_accuracy(models[0],  # Last checkpoint is the best accuracy.
-                                         tokenizer,
-                                         samples,
-                                         beam_size=FLAGS.beam_size)
+            # logging.info(f"Mean accuracy of last to second checkpoint is {np.mean(labels_last)}")
+            samples = [samples[i] for i in range(len(labels)) if labels[i] and not labels_zero[i]]
+            original_result['samples'] = samples
+            
+        if len(samples) > 100:
+            samples = samples[:100]
+            original_result['samples'] = samples
     
-        samples = [samples[i] for i in range(len(labels)) if labels[i] and not labels_zero[i]]
-        original_result['samples'] = samples
-        
+    logging.info(f"Number of samples to evaluate is: {len(samples)}")
         
     logging.info(f"Original average scores: {(original_result['precision'], original_result['recall'], original_result['mrr'])}")
     
@@ -627,7 +743,8 @@ def main(_):
     metrics = run_all_layer_configs(models,
                                     tokenizer,
                                     hashmap,
-                                    samples)
+                                    samples,
+                                    exp_type=FLAGS.exp_type)
     
         # unnecessary memory usage, but makes my job easier in plotting
     for method in metrics['dot'].keys():
@@ -642,3 +759,4 @@ def main(_):
 
 if __name__ == '__main__':
     app.run(main)
+    

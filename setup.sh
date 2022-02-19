@@ -1,2 +1,3 @@
-source $(pwd)/trex/bin/activate
-export PYTHONPATH=$(pwd)/LAMA:$PYTHONPATH
+#!/bin/bash
+source /raid/lingo/akyurek/gitother/fewshot_lama/trex/bin/activate
+export PYTHONPATH=/raid/lingo/akyurek/gitother/fewshot_lama/LAMA:$PYTHONPATH
