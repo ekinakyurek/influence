@@ -1,41 +1,41 @@
 #!/bin/bash
 
-lama_root='TREx_lama_templates_v2'
+lama_root='TREx_lama_templates_v3'
 
 uri_file=${lama_root}/abstracts/all_used_uris.txt
 hashmap_file=${lama_root}/abstracts/hashmap_used.json
 test_file=${lama_root}/all.tfrecord
 abstract_file=${lama_root}/abstracts/all_used.jsonl
-nn_output_file=nns/bm25/bm25plus_nn_results_v3_sentence_level.jsonl
-metric_output_file=metrics/bm25/bm25plus_metrics_v3_sentence_level.json
+nn_output_file=nns/bm25/unfiltered_bm25plus_nn_results_v3_sentence_level.jsonl
+metric_output_file=metrics/bm25/unfiltered_bm25plus_metrics_v3_sentence_level.json
 
 
-# source /raid/lingo/akyurek/gitother/fewshot_lama/setup.sh
+source /raid/lingo/akyurek/gitother/fewshot_lama/setup.sh
 
-# python -u evaluate.py \
-# --abstract_uri_list ${uri_file} \
-# --abstract_file ${abstract_file} \
-# --test_data ${test_file}  \
-# --hashmap_file ${hashmap_file} \
-# --nn_list_file ${nn_output_file} \
-# --output_file ${metric_output_file}
+python -u evaluate.py \
+--abstract_uri_list ${uri_file} \
+--abstract_file ${abstract_file} \
+--test_data ${test_file}  \
+--hashmap_file ${hashmap_file} \
+--nn_list_file ${nn_output_file} \
+--output_file ${metric_output_file}
 
-# deactivate
+deactivate
 
 eval "$(conda shell.bash hook)"
 conda activate transformers
-CUDA_VISIBLE_DEVICES=6,7,8,9
+CUDA_VISIBLE_DEVICES=10,11,12,13
 T5_PREFIX=T5_checkpoints/1000000/model/pytorch_model_
 checkpoint_folders=${T5_PREFIX}5100.bin,${T5_PREFIX}10200.bin,${T5_PREFIX}15300.bin,${T5_PREFIX}1000000.bin
 
 for i in 0 1 2; do
-  for eos in "eos"; do
+  for eos in "no_eos" "eos"; do
     for subset in "learned" "random"; do    
         for accum in "accum"; do
         # cnt=$((cnt + 1))
         # echo $cnt
         # 	if [[ $cnt -gt 2 ]]; then    
-            output_metric_prefix=metrics/reranker/exp_layers_${i}
+            output_metric_prefix=metrics/reranker/unfiltered_exp_layers_${i}
             mkdir -p ${output_metric_prefix}
             output_metric_prefix=${output_metric_prefix}/ln_sl_${eos}_${target}_${subset}_${accum}
             params=("--metrics_file=${metric_output_file}" "--seed=${i}" "--hashmap_file=${hashmap_file}" "--checkpoint_folders=${checkpoint_folders}" "--output_metrics_prefix=${output_metric_prefix}")
