@@ -1,8 +1,0 @@
-{"relation": "oP159_sP1376", "template": "The headquarter of [X] is in the country of [Y] .", "type": "multihop", "label": "none", "description": "The headquarter of [X] is in the country of [Y] ."}
-{"relation": "sP37_oP19", "template": "The official language of the country where [X] was born is [Y] .", "type": "multihop", "label": "none", "description": "The official language of the country where [X] was born is [Y] ."}
-{"relation": "oP178_oP108", "template": "[X] works for a company that developed [Y] .", "type": "multihop", "label": "none", "description": "[X] works for a company that developed [Y] ."}
-{"relation": "oP361_oP527", "template": "[X] is a low-level part of [Y] .", "type": "multihop", "label": "none", "description": "[X] is a low-level part of [Y] ."}
-{"relation": "oP361_oP31", "template": "One component of [X] is [Y] .", "type": "multihop", "label": "none", "description": "One component of [X] is [Y] ."}
-{"relation": "oP361_oP361", "template": "[X] and [Y] are part of the same thing .", "type": "multihop", "label": "none", "description": "[X] and [Y] are part of the same thing ."}
-{"relation": "oP527_oP527", "template": "[X] and [Y] share at least one element .", "type": "multihop", "label": "none", "description": "[X] and [Y] share at least one element ."}
-{"relation": "oP178_oP178", "template": "[X] and [Y] are developed by the same company .", "type": "multihop", "label": "none", "description": "[X] and [Y] are developed by the same company ."}

@@ -1,30 +1,19 @@
-import os
 import json
-import functools
 import asyncio
 import torch  # TODO(ekina): make this jax
-import torch.nn.functional as F
 from absl import app
 from absl import flags
-from absl import logging
-from os import listdir
 import numpy as np
 from tqdm import tqdm
-import pdb
 
-import tensorflow as tf
-try:
-    # Disable all GPUS
-    tf.config.set_visible_devices([], 'GPU')
-    visible_devices = tf.config.get_visible_devices()
-    for device in visible_devices:
-        assert device.device_type != 'GPU'
-except:
-    print("Invalid device or cannot modify virtual devices once initialized.")
-    raise ValueError('Cannot disable gpus for tensorflow')
+from src.tf_utils import tf
+from src.tf_utils import get_tfexample_decoder_old
+from src.tf_utils import get_index_decoder
+from src.linalg_utils import normalize_segments
 
 
 FLAGS = flags.FLAGS
+
 
 flags.DEFINE_string('abstract_vectors', default=None,
                     help='input file path to convert')
@@ -57,42 +46,6 @@ flags.DEFINE_bool('normalize', default=False,
                   help="normalize embeddings")
 
 
-def normalize_segments(array, size=768):
-    num_segments = array.shape[1] // size
-    for i in range(num_segments):
-        array[:, (i-1)*size:i*size] = F.normalize(array[:, (i-1)*size:i*size])
-    return array
-
-def get_tfexample_decoder(feature_length):
-    """Returns tf dataset parser."""
-    print("feature_length: ", feature_length)
-    vector_feature_description = {
-        'index': tf.io.FixedLenFeature([1], tf.int64),
-        'embedding': tf.io.FixedLenFeature([feature_length], tf.float32),
-    }
-
-    def _parse_data(proto):
-        data = tf.io.parse_single_example(proto, vector_feature_description)
-        return data['embedding']
-
-    return _parse_data
-
-
-def get_index_decoder(feature_length):
-    """Returns tf dataset parser."""
-    vector_feature_description = {
-        'index': tf.io.FixedLenFeature([1], tf.int64),
-        'embedding': tf.io.FixedLenFeature([feature_length], tf.float32),
-    }
-
-    def _parse_data(proto):
-        data = tf.io.parse_single_example(proto, vector_feature_description)
-        return data['index']
-
-    return _parse_data
-
-
-
 def load_a_shard_from_tfrecord(dataset,
                                feature_length,
                                positions,
@@ -101,7 +54,7 @@ def load_a_shard_from_tfrecord(dataset,
     shard_length = positions[1] - positions[0]
     ds_loader = dataset.skip(positions[0])\
                        .take(shard_length)\
-                       .map(get_tfexample_decoder(feature_length))\
+                       .map(get_tfexample_decoder_old(feature_length))\
                        .batch(shard_length, num_parallel_calls=4)\
                        .as_numpy_iterator()
 
@@ -144,28 +97,12 @@ def get_shard_positions(dataset, n_workers):
     return positions
 
 
-def _tfrecord(index, value):
-    """Converts dummy data values to tf records."""
-    record = {
-      'embedding': tf.train.Feature(float_list=tf.train.FloatList(value=value))}
-    return tf.train.Example(features=tf.train.Features(feature=record))
-
-
-def create_dummy_tfrecord_dataset(output_file, n, feature_size):
-    """Creates dummy data to test this code."""
-    # Somewhat this is extremely slow!
-    with tf.io.TFRecordWriter(output_file) as writer:
-        for i in range(n):
-            value = tf.random.uniform((feature_size,))
-            tf_example = _tfrecord(i, value)
-            writer.write(tf_example.SerializeToString())
-
-
 def create_dummy_numpy_dataset(output_file, n, feature_size):
     """Creates dummy data to test this code."""
     # Somewhat this is extremely slow!
     X = np.random.rand(n, feature_size).astype(np.float32)
     np.save(output_file, X, allow_pickle=False)
+
 
 def sharded_open(filename):
     if '@' in filename:
@@ -176,6 +113,7 @@ def sharded_open(filename):
     else:
         dataset = tf.data.TFRecordDataset(filename)
     return dataset
+
 
 async def _prepare_shards(args):
     """Reads shards from the merged file and sends them to GPUs."""
@@ -217,9 +155,11 @@ async def nn_retrieve(shards, batch, positions, k=100):
     indices = index_tensor[local_ids, torch.arange(index_tensor.shape[-1])]
     return scores, indices
 
+
 def get_indices(dataset, feature_length):
     ds = dataset.map(get_index_decoder(feature_length)).as_numpy_iterator()
     return np.array([d[0] for d in ds])
+
 
 def main(_):
     # create_dummy_numpy_dataset(FLAGS.abstract_vectors,
@@ -234,7 +174,7 @@ def main(_):
     test_indices = get_indices(sharded_open(FLAGS.test_vectors), FLAGS.feature_size)
     test_dataset = sharded_open(FLAGS.test_vectors)
 
-    test_loader = test_dataset.map(get_tfexample_decoder(FLAGS.feature_size))\
+    test_loader = test_dataset.map(get_tfexample_decoder_old(FLAGS.feature_size))\
                               .batch(FLAGS.batch_size)\
                               .as_numpy_iterator()
 

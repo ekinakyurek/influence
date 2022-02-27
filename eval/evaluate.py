@@ -3,18 +3,12 @@ from absl import app
 from absl import flags
 import numpy as np
 import random
-import tensorflow as tf
 
-
-try:
-    # Disable all GPUS
-    tf.config.set_visible_devices([], 'GPU')
-    visible_devices = tf.config.get_visible_devices()
-    for device in visible_devices:
-        assert device.device_type != 'GPU'
-except:
-    print("Invalid device or cannot modify virtual devices once initialized.")
-    raise ValueError('Cannot disable gpus for tensorflow')
+from src.metric_utils import precision_recall
+from src.metric_utils import reciprocal_rank
+from src.metric_utils import K_EVALS
+from src.tf_utils import load_examples_from_tf_records
+from src.tf_utils import tf
 
 
 FLAGS = flags.FLAGS
@@ -44,36 +38,6 @@ flags.DEFINE_bool('only_masked_sentence', default=False,
                   help='convert abstracts to single sentence by extracting only the masked sentence')
 
 
-K_EVALS = (1, 3, 5, 10, 25)
-
-
-def get_tfexample_decoder():
-    """Returns tf dataset parser."""
-
-    feature_dict = {
-        'inputs_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'targets_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'uuid': tf.io.FixedLenFeature([], tf.string),
-        'obj_uri': tf.io.FixedLenFeature([], tf.string),
-        'sub_uri': tf.io.FixedLenFeature([], tf.string),
-        'predicate_id': tf.io.FixedLenFeature([], tf.string),
-        'obj_surface': tf.io.FixedLenFeature([], tf.string),
-        'sub_surface': tf.io.FixedLenFeature([], tf.string),
-       }
-
-    def _parse_data(proto):
-        return tf.io.parse_single_example(proto, feature_dict)
-
-    return _parse_data
-
-
-def load_examples_from_tf_records(file):
-    """Loads one shard of a dataset from the dataset file."""
-    dataset = tf.data.TFRecordDataset(file)
-    ds = dataset.map(get_tfexample_decoder()).as_numpy_iterator()
-    return [{k: v.decode() for k, v in datum.items()} for datum in ds]
-
-
 def extract_masked_sentence(abstract: str, term='<extra_id_0>'):
     term_start = abstract.find(term)
     assert term_start > -1
@@ -88,22 +52,6 @@ def extract_masked_sentence(abstract: str, term='<extra_id_0>'):
         sentence_end = abstract.find('.', term_end)
     sentence_end = min(sentence_end + 1, len(abstract))
     return abstract[sentence_start:sentence_end]
-
-
-def precision_recall(nearest_ids, correct_ids, ks=K_EVALS):
-    precision, recall = {}, {}
-    for k in ks:
-        nn_k = nearest_ids[:k]
-        precision[k] = len([1 for id in nn_k if id in correct_ids]) / k
-        recall[k] = len([1 for id in correct_ids if id in nn_k]) / len(correct_ids)
-    return precision, recall
-
-
-def reciprocal_rank(nearest_ids, correct_ids):
-    for i, id in enumerate(nearest_ids):
-        if id in correct_ids:
-            return 1 / (i+1)
-    return 0
 
 
 def main(_):

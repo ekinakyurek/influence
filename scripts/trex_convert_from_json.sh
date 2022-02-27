@@ -4,5 +4,5 @@ echo $input_folder
 
 for f in ${input_folder}/*jsonl; do
     echo "$f"
-    python json_to_tf_record.py --input_file $f
+    python data/json_to_tf_record.py --input_file $f
 done

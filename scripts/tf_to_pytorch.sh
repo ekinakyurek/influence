@@ -1,4 +1,6 @@
-export T5=T5_checkpoints/1000000/model/
+data_root=LAMA/data
+lama_root=${data_root}/TREx_lama_templates_v3
+export T5=${data_root}/T5_checkpoints/1000000/model/
 
 # deactivate
 #

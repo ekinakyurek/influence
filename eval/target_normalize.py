@@ -1,27 +1,15 @@
-import os
-import json
-import functools
 import asyncio
 import torch  # TODO(ekina): make this jax
 import torch.nn.functional as F
 from absl import app
 from absl import flags
-from absl import logging
-from os import listdir
 import numpy as np
-from tqdm import tqdm
 import contextlib2
 
-import tensorflow as tf
-try:
-    # Disable all GPUS
-    tf.config.set_visible_devices([], 'GPU')
-    visible_devices = tf.config.get_visible_devices()
-    for device in visible_devices:
-        assert device.device_type != 'GPU'
-except:
-    print("Invalid device or cannot modify virtual devices once initialized.")
-    raise ValueError('Cannot disable gpus for tensorflow')
+from src.linalg_utils import normalize_segments
+from src.tf_utils import tf
+from src.tf_utils import get_tfexample_decoder_old
+from src.tf_utils import get_index_decoder
 
 
 FLAGS = flags.FLAGS
@@ -55,41 +43,6 @@ flags.DEFINE_integer('gpu_workers', default=1,
                      help='number of gpus to distribute')
 
 
-def normalize_segments(array):
-    num_segments = array.shape[1] // 1024
-    for i in range(num_segments):
-        array[:, (i-1)*1024:i*1024] = F.normalize(array[:, (i-1)*1024:i*1024])
-    return array
-
-def get_tfexample_decoder(feature_length):
-    """Returns tf dataset parser."""
-    vector_feature_description = {
-        'index': tf.io.FixedLenFeature([1], tf.int64),
-        'embedding': tf.io.FixedLenFeature([feature_length], tf.float32),
-    }
-
-    def _parse_data(proto):
-        data = tf.io.parse_single_example(proto, vector_feature_description)
-        return data['embedding']
-
-    return _parse_data
-
-
-def get_index_decoder(feature_length):
-    """Returns tf dataset parser."""
-    vector_feature_description = {
-        'index': tf.io.FixedLenFeature([1], tf.int64),
-        'embedding': tf.io.FixedLenFeature([feature_length], tf.float32),
-    }
-
-    def _parse_data(proto):
-        data = tf.io.parse_single_example(proto, vector_feature_description)
-        return data['index']
-
-    return _parse_data
-
-
-
 def load_a_shard_from_tfrecord(dataset,
                                feature_length,
                                positions,
@@ -98,14 +51,14 @@ def load_a_shard_from_tfrecord(dataset,
     shard_length = positions[1] - positions[0]
     ds_loader = dataset.skip(positions[0])\
                        .take(shard_length)\
-                       .map(get_tfexample_decoder(feature_length))\
+                       .map(get_tfexample_decoder_old(feature_length))\
                        .batch(shard_length, num_parallel_calls=4)\
                        .as_numpy_iterator()
 
     X = next(iter(ds_loader))
     X = torch.from_numpy(X)
     if normalize:
-        X = normalize_segments(X)
+        X = normalize_segments(X, size=1024)
     return X
 
 
@@ -117,7 +70,7 @@ def load_a_shard_from_numpy(np_file,
     X = np.load(np_file, mmap_mode='r')
     X = torch.from_numpy(X[positions[0]:positions[1], :])
     if normalize:
-        X = normalize_segments(X)
+        X = normalize_segments(X, size=1024)
     return X
 
 
@@ -151,6 +104,7 @@ def sharded_open(filename):
         dataset = tf.data.TFRecordDataset(filename)
     return dataset
 
+
 async def _prepare_shards(file, args):
     """Reads shards from the merged file and sends them to GPUs."""
 
@@ -170,12 +124,13 @@ async def _prepare_shards(file, args):
 
     return shards, positions
 
+
 def get_indices(dataset, feature_length):
     ds = dataset.map(get_index_decoder(feature_length)).as_numpy_iterator()
     return np.array([d[0] for d in ds])
 
 
-def get_tfexample_decoder_examples():
+def get_tfexample_decoder_old_examples():
     """Returns tf dataset parser."""
 
     feature_dict = {
@@ -196,7 +151,7 @@ def get_tfexample_decoder_examples():
     return _parse_data
 
 
-def get_tfexample_decoder_abstracts():
+def get_tfexample_decoder_old_abstracts():
     """Returns tf dataset parser."""
 
     feature_dict = {
@@ -215,13 +170,13 @@ def get_tfexample_decoder_abstracts():
 
 def load_abstracts_from_tfrecord(dataset):
     """Loads one shard of a dataset from the dataset file."""
-    ds_loader = dataset.map(get_tfexample_decoder_abstracts()).as_numpy_iterator()
+    ds_loader = dataset.map(get_tfexample_decoder_old_abstracts()).as_numpy_iterator()
     return [d for d in ds_loader]
 
 
 def load_examples_from_tfrecord(dataset):
     """Loads one shard of a dataset from the dataset file."""
-    ds_loader = dataset.map(get_tfexample_decoder_examples()).as_numpy_iterator()
+    ds_loader = dataset.map(get_tfexample_decoder_old_examples()).as_numpy_iterator()
     return [d for d in ds_loader]
 
 

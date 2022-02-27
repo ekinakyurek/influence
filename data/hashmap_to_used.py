@@ -1,12 +1,8 @@
-import os
 import json
-import pdb
 from absl import app
 from absl import flags
-from absl import logging
-from os import listdir
 import numpy as np
-import tensorflow as tfp
+from src.json_utils import dump_map_to_json
 
 
 FLAGS = flags.FLAGS
@@ -19,17 +15,6 @@ flags.DEFINE_string('abstract_uri_list', default=None,
 flags.DEFINE_string('output_file', default=None,
                     help='output file to write')
 
-
-class SetEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, set):
-            return list(obj)
-        return json.JSONEncoder.default(self, obj)
-
-
-def dump_map_to_json(hashmap, output_file):
-    with open(output_file, 'w') as f:
-        json.dump(hashmap, f, cls=SetEncoder)
 
 def main(argv):
     uri_list = np.array(

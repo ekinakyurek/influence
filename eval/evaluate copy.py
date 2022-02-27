@@ -1,23 +1,11 @@
-import os
 import json
-import functools
 from absl import app
 from absl import flags
-from absl import logging
 import numpy as np
 import random
-import pdb
 
-import tensorflow as tf
-try:
-    # Disable all GPUS
-    tf.config.set_visible_devices([], 'GPU')
-    visible_devices = tf.config.get_visible_devices()
-    for device in visible_devices:
-        assert device.device_type != 'GPU'
-except:
-    print("Invalid device or cannot modify virtual devices once initialized.")
-    raise ValueError('Cannot disable gpus for tensorflow')
+from src.tf_utils import load_examples_from_tf_records
+from src.metric_utils import reciprocal_rank, precision_recall, K_EVALS
 
 
 FLAGS = flags.FLAGS
@@ -39,49 +27,6 @@ flags.DEFINE_string('hashmap_file', default=None,
 
 flags.DEFINE_string('output_file', default=None,
                     help='output file path to writer neighbours')
-
-
-def get_tfexample_decoder():
-    """Returns tf dataset parser."""
-
-    feature_dict = {
-        'inputs_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'targets_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'uuid': tf.io.FixedLenFeature([], tf.string),
-        'obj_uri': tf.io.FixedLenFeature([], tf.string),
-        'sub_uri': tf.io.FixedLenFeature([], tf.string),
-        'predicate_id': tf.io.FixedLenFeature([], tf.string),
-        'obj_surface': tf.io.FixedLenFeature([], tf.string),
-        'sub_surface': tf.io.FixedLenFeature([], tf.string),
-       }
-
-    def _parse_data(proto):
-        return tf.io.parse_single_example(proto, feature_dict)
-
-    return _parse_data
-
-
-def load_examples_from_tf_records(file):
-    """Loads one shard of a dataset from the dataset file."""
-    dataset = tf.data.TFRecordDataset(file)
-    ds = dataset.map(get_tfexample_decoder()).as_numpy_iterator()
-    return [{k: v.decode() for k, v in datum.items()} for datum in ds]
-
-
-def precision_recall(nearest_ids, correct_ids, ks=(1, 5, 10, 50, 100)):
-    precision, recall = {}, {}
-    for k in ks:
-        nn_k = nearest_ids[:k]
-        precision[k] = len([1 for id in nn_k if id in correct_ids]) / k
-        recall[k] = len([1 for id in correct_ids if id in nn_k]) / len(correct_ids)
-    return precision, recall
-
-
-def reciprocal_rank(nearest_ids, correct_ids):
-    for i, id in enumerate(nearest_ids):
-        if id in correct_ids:
-            return 1 / (i+1)
-    return 0
 
 
 def main(_):
@@ -159,7 +104,7 @@ def main(_):
                                        "distractors":  distractors})
 
 
-    for k in (1, 5, 10,  50, 100):
+    for k in K_EVALS:
         metrics['precision'][k] = np.mean([p[k] for p in precisions])
         metrics['recall'][k] = np.mean([r[k] for r in recalls])
     metrics['mrr'] = np.mean(rrs)

@@ -2,9 +2,9 @@ import os
 import json
 from absl import app
 from absl import flags
-from absl import logging
 from os import listdir
-import tensorflow as tf
+from src.json_utils import dump_abstracts_json, dump_map_to_json
+from src.tf_utils import dump_abstracts_tf_record
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string('abstract_file', default=None,
@@ -17,30 +17,13 @@ flags.mark_flag_as_required('input_folder')
 flags.mark_flag_as_required('abstract_file')
 
 
-def _bytes_feature(value):
-    """Returns a bytes_list from a string / byte."""
-    if isinstance(value, type(tf.constant(0))):
-        value = value.numpy()
-    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
-
-
-def _float_feature(value):
-    """Returns a float_list from a float / double."""
-    return tf.train.Feature(float_list=tf.train.FloatList(value=[value]))
-
-
-def _int64_feature(value):
-    """Returns an int64_list from a bool / enum / int / uint."""
-    return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
-
-
-def _get_abstract(record, abstracts, key='obj_uri'):
-    uri = record[key]
-    if uri in abstracts:
-        abstract = abstracts[uri]
-    else:
-        abstract = next(iter(abstracts.values()))
-    return abstract
+# def _get_abstract(record, abstracts, key='obj_uri'):
+#     uri = record[key]
+#     if uri in abstracts:
+#         abstract = abstracts[uri]
+#     else:
+#         abstract = next(iter(abstracts.values()))
+#     return abstract
 
 
 def _mask_an_abstract(abstract):
@@ -91,11 +74,6 @@ def _mask_an_abstract(abstract):
     return examples
 
 
-def _tfrecord(record):
-    feature = {k: _bytes_feature(v.encode('utf-8')) for (k, v) in record.items()}
-    return tf.train.Example(features=tf.train.Features(feature=feature))
-
-
 def _filter_abstracts(abstracts, hashmap, query_file, used_facts):
     local_abstracts = []
     current_facts = set()
@@ -115,31 +93,12 @@ def _filter_abstracts(abstracts, hashmap, query_file, used_facts):
     return local_abstracts
 
 
-def dump_abstracts_json(abstracts, output_file):
-    with open(output_file, 'w') as f:
-        for abstract in abstracts:
-            json.dump(abstract, f)
-            f.write('\n')
-
-
-def dump_abstracts_tf_record(abstracts, output_file):
-    with tf.io.TFRecordWriter(output_file) as writer:
-        for abstract in abstracts:
-            tf_example = _tfrecord(abstract)
-            writer.write(tf_example.SerializeToString())
-
-
 def read_all_abstracts(abstract_file):
     abstracts = []
     with open(abstract_file, 'r') as f:
         for i, line in enumerate(f):
             abstracts.extend(json.loads(line))
     return abstracts
-
-
-def dump_map_to_json(hashmap, output_file):
-    with open(output_file, 'w') as f:
-        json.dump(hashmap, f)
 
 
 def _mask_all(abstracts):
@@ -219,7 +178,6 @@ def main(argv):
                      os.path.join(FLAGS.input_folder,
                                   'abstracts',
                                   'hashmap_used.json'))
-
     
     output_json = os.path.join(FLAGS.input_folder,
                                'abstracts',

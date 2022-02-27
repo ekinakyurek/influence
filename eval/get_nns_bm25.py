@@ -4,19 +4,8 @@ from absl import flags
 import numpy as np
 from tqdm import tqdm
 from rank_bm25 import BM25Plus
-import tensorflow as tf
-
-
-try:
-    # Disable all GPUS
-    tf.config.set_visible_devices([], 'GPU')
-    visible_devices = tf.config.get_visible_devices()
-    for device in visible_devices:
-        assert device.device_type != 'GPU'
-except:
-    print("Invalid device or cannot modify virtual devices once initialized.")
-    raise ValueError('Cannot disable gpus for tensorflow')
-
+from src.tf_utils import get_tfexample_decoder_examples_io, load_dataset_from_tfrecord
+from src.tf_utils import tf
 
 FLAGS = flags.FLAGS
 
@@ -40,53 +29,6 @@ flags.DEFINE_bool('target_only', default=False,
 
 flags.DEFINE_bool('only_masked_sentence', default=False,
                   help='convert abstracts to single sentence by extracting only the masked sentence')
-
-
-def get_tfexample_decoder_examples():
-    """Returns tf dataset parser."""
-
-    feature_dict = {
-        'inputs_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'targets_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'uuid': tf.io.FixedLenFeature([], tf.string),
-        'obj_uri': tf.io.FixedLenFeature([], tf.string),
-        'sub_uri': tf.io.FixedLenFeature([], tf.string),
-        'predicate_id': tf.io.FixedLenFeature([], tf.string),
-        'obj_surface': tf.io.FixedLenFeature([], tf.string),
-        'sub_surface': tf.io.FixedLenFeature([], tf.string),
-       }
-
-    def _parse_data(proto):
-        data = tf.io.parse_single_example(proto, feature_dict)
-        return (data['inputs_pretokenized'], data['targets_pretokenized'])
-
-    return _parse_data
-
-
-def get_tfexample_decoder_abstracts():
-    """Returns tf dataset parser."""
-
-    feature_dict = {
-        'inputs_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'targets_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'masked_uri': tf.io.FixedLenFeature([], tf.string),
-        'page_uri': tf.io.FixedLenFeature([], tf.string),
-        'masked_type': tf.io.FixedLenFeature([], tf.string),
-        'facts': tf.io.FixedLenFeature([], tf.string),
-        'sentence_uris': tf.io.FixedLenFeature([], tf.string),
-       }
-
-    def _parse_data(proto):
-        data = tf.io.parse_single_example(proto, feature_dict)
-        return (data['inputs_pretokenized'], data['targets_pretokenized'])
-
-    return _parse_data
-
-
-def load_dataset_from_tfrecord(dataset):
-    """Loads one shard of a dataset from the dataset file."""
-    ds_loader = dataset.map(get_tfexample_decoder_abstracts()).as_numpy_iterator()
-    return [d for d in ds_loader]
 
 
 def extract_masked_sentence(abstract: str, term='<extra_id_0>'):
@@ -143,7 +85,7 @@ def main(_):
     bm25 = BM25Plus(corpus)
 
     test_dataset = tf.data.TFRecordDataset(FLAGS.test_file)
-    test_loader = test_dataset.map(get_tfexample_decoder_examples()).as_numpy_iterator()
+    test_loader = test_dataset.map(get_tfexample_decoder_examples_io()).as_numpy_iterator()
 
     with open(FLAGS.output_file, "w") as f:
         for example in tqdm(test_loader):
@@ -161,6 +103,7 @@ def main(_):
                 
             line = {'scores': scores, 'neighbor_ids': idxs}
             print(json.dumps(line), file=f)
+
 
 if __name__ == '__main__':
     app.run(main)

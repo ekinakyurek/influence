@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 import json
 from typing import Optional, Sequence, Mapping
-from numpy.lib.function_base import average
 import torch  # TODO(ekina): make this jax
 import torch.nn.functional as F
 from absl import app
@@ -11,20 +10,11 @@ import numpy as np
 from tqdm import tqdm
 from transformers import MT5ForConditionalGeneration, T5Tokenizer
 import random
-import tensorflow as tf
+from src.tf_utils import tf
+from src.metric_utils import K_EVALS, precision_recall, reciprocal_rank
 import copy
-from dataclasses import dataclass, field
-# import pdb
-
-try:
-    # Disable all GPUS
-    tf.config.set_visible_devices([], 'GPU')
-    visible_devices = tf.config.get_visible_devices()
-    for device in visible_devices:
-        assert device.device_type != 'GPU'
-except:
-    print("Invalid device or cannot modify virtual devices once initialized.")
-    raise ValueError('Cannot disable gpus for tensorflow')
+from dataclasses import dataclass
+from dataclasses import field
 
 
 FLAGS = flags.FLAGS
@@ -80,8 +70,6 @@ flags.DEFINE_bool('load_accums', default=False,
 flags.DEFINE_string('samples_from_exp', default=None,
                   help="exp json to read samples")
 
-K_EVALS = (1, 3, 5, 10, 25)
-
 
 @dataclass
 class LayerConfig:
@@ -94,52 +82,6 @@ class LayerConfig:
             for prefix in self.layer_prefixes:
                 self.layer_weights.append(1.0)
 
-
-def get_tfexample_decoder_examples():
-    """Return tf dataset parser for examples."""
-
-    feature_dict = {
-        'inputs_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'targets_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'uuid': tf.io.FixedLenFeature([], tf.string),
-        'obj_uri': tf.io.FixedLenFeature([], tf.string),
-        'sub_uri': tf.io.FixedLenFeature([], tf.string),
-        'predicate_id': tf.io.FixedLenFeature([], tf.string),
-        'obj_surface': tf.io.FixedLenFeature([], tf.string),
-        'sub_surface': tf.io.FixedLenFeature([], tf.string),
-       }
-
-    def _parse_data(proto):
-        data = tf.io.parse_single_example(proto, feature_dict)
-        return data
-
-    return _parse_data
-
-
-def get_tfexample_decoder_abstracts():
-    """Return tf dataset parser for abstracts."""
-
-    feature_dict = {
-        'inputs_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'targets_pretokenized': tf.io.FixedLenFeature([], tf.string),
-        'masked_uri': tf.io.FixedLenFeature([], tf.string),
-        'page_uri': tf.io.FixedLenFeature([], tf.string),
-        'masked_type': tf.io.FixedLenFeature([], tf.string),
-        'facts': tf.io.FixedLenFeature([], tf.string),
-        'sentence_uris': tf.io.FixedLenFeature([], tf.string),
-    }
-    
-    def _parse_data(proto):
-        data = tf.io.parse_single_example(proto, feature_dict)
-        return data  # (data['inputs_pretokenized'], data['targets_pretokenized'])
-
-    return _parse_data
-
-
-def load_dataset_from_tfrecord(dataset, load_fn):
-    """Load one shard of a dataset from the dataset file."""
-    ds_loader = dataset.map(load_fn()).as_numpy_iterator()
-    return [d for d in ds_loader]
 
 
 def tokenize(tokenizer: T5Tokenizer, record: Mapping):
@@ -158,23 +100,6 @@ def tokenize(tokenizer: T5Tokenizer, record: Mapping):
     return {'inputs': inputs, 'targets': targets[:, :-1]}
 
 
-def sharded_open(filename: str):
-    """Open sharded tfrecords as TFRecordDataset"""
-    if '@' in filename:
-        prefix, no_shards = filename.split('@')
-        no_shards = int(no_shards)
-        filenames = [f'{prefix}-{str(i).zfill(5)}-of-{str(no_shards).zfill(5)}' for i in range(no_shards)]
-        dataset = tf.data.TFRecordDataset(filenames=filenames)
-    else:
-        dataset = tf.data.TFRecordDataset(filename)
-    return dataset
-
-
-def f_normalize(x):
-    """Normalize vectors"""
-    return F.normalize(x, dim=0)
-
-
 def check_equal(a1: Mapping, a2: Mapping, collapse: bool):
     if collapse:
         return get_sentence(a1) == get_sentence(a2)
@@ -184,24 +109,6 @@ def check_equal(a1: Mapping, a2: Mapping, collapse: bool):
 
 def check_correct(a1: Mapping, fact_abstracts: Sequence[Mapping], collapse: bool):
     return any((check_equal(a1, a, collapse) for a in fact_abstracts))
-
-
-def precision_recall(abstracts: Sequence[Mapping], fact_abstracts: Sequence[Mapping], ks: Sequence[int] = K_EVALS, collapse=False):
-    """Calculate precision and recall given nearest ids and correct ids"""
-    precision, recall = {}, {}
-    for k in ks:
-        nn_k = abstracts[:k]
-        precision[k] = len([1 for a in nn_k if check_correct(a, fact_abstracts, collapse)]) / k
-        recall[k] = len([1 for a in fact_abstracts if check_correct(a, nn_k, collapse)]) / len(fact_abstracts)
-    return precision, recall
-
-
-def reciprocal_rank(abstracts: Sequence[Mapping], fact_abstracts: Sequence[Mapping], collapse: bool = False):
-    """Return reciprocal rank score"""
-    for i, a in enumerate(abstracts):
-        if check_correct(a, fact_abstracts, collapse):
-            return 1 / (i+1)
-    return 0
 
 
 def get_gradients(model: MT5ForConditionalGeneration, data: Mapping):
@@ -448,7 +355,7 @@ def get_all_layer_configs(num_layers=12, exp_type="layers"):
                 index += 1
     return layer_configs
 
-def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_layers=12, exp_type="layers"):  # TODO: Read num_layers from models
+def run_all_layer_configs(models, reranker_fn, tokenizer: T5Tokenizer, hashmap, samples, num_layers=12, exp_type="layers"):  # TODO: Read num_layers from models
     """Runs reranking experiments for all configurations listed below and returns the results"""
     layer_configs = get_all_layer_configs(num_layers, exp_type)
     
@@ -490,7 +397,7 @@ def run_all_layer_configs(models, tokenizer: T5Tokenizer, hashmap, samples, num_
                     if config_name not in result[method]:
                         result[method][config_name] = []
             
-                    abstracts_config, scores_config = rerank_with_scores(abstracts, scores, layers=config, collapse=collapse, normalize=(k == 'cosine'))
+                    abstracts_config, scores_config = reranker_fn(abstracts, scores, layers=config, collapse=collapse, normalize=(k == 'cosine'))
                                
                     precision, recall, rr = evaluate(query, abstracts_config, sample['fact_abstracts'], only_target_abstracts=only_target_abstracts, collapse=collapse)
 
@@ -640,7 +547,7 @@ def get_model_accuracy(model, tokenizer: T5Tokenizer, samples, beam_size=3):
 EPS=1e-7
 
 
-def main(_):
+def main(_, reranker_fn=rerank_with_scores):
     for attr, flag_obj in FLAGS.__flags.items():
         print("--%s=%s" % (attr, flag_obj.value))
        
@@ -741,6 +648,7 @@ def main(_):
     random_baseline = run_random_baseline(samples)
 
     metrics = run_all_layer_configs(models,
+                                    reranker_fn,
                                     tokenizer,
                                     hashmap,
                                     samples,
