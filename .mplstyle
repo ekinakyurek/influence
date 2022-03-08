@@ -1,0 +1,15 @@
+xtick.labelsize: 13
+ytick.labelsize: 13
+font.size: 13
+figure.autolayout: True
+figure.figsize: 7.2,4.45
+figure.dpi: 150
+figure.facecolor: white
+axes.titlesize : 14
+axes.labelsize : 13
+lines.linewidth : 2
+lines.markersize : 6
+legend.fontsize: 10
+mathtext.fontset: stix
+font.family: STIXGeneral
+font.serif: Times
