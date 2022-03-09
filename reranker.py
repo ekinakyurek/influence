@@ -74,7 +74,7 @@ def main(_):
                   "conda activate transformers;"
                   "export PYTHONHASHSEED=0;")
 
-    for i in range(3):
+    for i in range(1,3):
         output_metric_folder = os.path.join(FLAGS.exp_folder, f"seed_{i}")
         for subset in ("learned", "random"):
             os.makedirs(output_metric_folder, exist_ok=True)
@@ -106,7 +106,7 @@ def main(_):
             pre_cmd = (f"python -u eval/reranker_pre.py {pre_params} > "
                        f"{baseline_log_prefix}/pre.log")
 
-            subprocess.run(header_cmd + pre_cmd, shell=True)
+            # subprocess.run(header_cmd + pre_cmd, shell=True)
 
             for eos in ("no_eos", ):
                 for accum in ("accum", ):
@@ -152,13 +152,13 @@ def main(_):
                             ckpt_params += "--calculate_gradient_scores"
 
                         ckpt_cmd = (f"python -u eval/reranker_single_checkpoint.py {ckpt_params} >"
-                                    f"{ckpt_log_prefix}/ckpt.{i}.log;")
+                                    f"{ckpt_log_prefix}/ckpt.{c}.log;")
 
-                        subprocess.Popen(header_cmd + ckpt_cmd, shell=True)
+                        # subprocess.Popen(header_cmd + ckpt_cmd, shell=True)
                         time.sleep(5)
 
                     wait_for_files(files_to_check)
-                    time.sleep(360)
+                    time.sleep(5)
 
                     post_params = (
                             f"--metrics_file={baseline_eval_file}.pickle "
@@ -171,7 +171,7 @@ def main(_):
                     post_cmd = (f"python -u eval/reranker_post.py {post_params} >"
                                 f"{ckpt_log_prefix}/post.log;")
 
-                    subprocess.run(header_cmd + post_cmd, shell=True)
+                    subprocess.Popen(header_cmd + post_cmd, shell=True)
 
 
 if __name__ == '__main__':
