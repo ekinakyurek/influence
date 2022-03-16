@@ -10,6 +10,7 @@ from absl import logging
 import numpy as np
 from tqdm import tqdm
 from transformers import MT5ForConditionalGeneration, T5Tokenizer
+from transformers import AutoTokenizer
 import random
 
 
@@ -42,22 +43,123 @@ flags.DEFINE_bool('calculate_activation_scores', default=False,
 flags.DEFINE_bool('calculate_gradient_scores', default=False,
                   help="whether to calculate gradient scores")
 
+flags.DEFINE_bool('use_entity_locations', default=False,
+                  help="use only entity locations when calculating activation embeddings")
 
-def tokenize(tokenizer: T5Tokenizer, record: Mapping):
+
+def _find_entity_locations(input, target, surface, name):
+    output = [None, None]
+    try:
+        obj_start = input.index(surface)
+        obj_end = min(obj_start + len(surface), len(input))
+        output[0] = (obj_start, obj_end, name)
+    except ValueError:
+        logging.warning("No object in query")
+
+    try:
+        obj_start = target.index(surface)
+        obj_end = min(obj_start + len(surface), len(target))
+        output[1] = (obj_start, obj_end, name)
+    except ValueError:
+        logging.warning("No object in query")
+
+    return output
+
+
+def find_entity_locations(data: Mapping):
+    obj_surface = data['obj_surface']
+    sub_surface = data['sub_surface']
+    input = data['inputs_pretokenized']
+    target = data['targets_pretokenized']
+
+    if obj_surface is not None:
+        obj_loc_in_input, obj_loc_in_target = _find_entity_locations(
+                                                    input,
+                                                    target,
+                                                    obj_surface,
+                                                    "object")
+
+    if sub_surface is not None:
+        sub_loc_in_input, sub_loc_in_target = _find_entity_locations(
+                                                    input,
+                                                    target,
+                                                    sub_surface,
+                                                    "subject")
+
+    return ((obj_loc_in_input, sub_loc_in_input),
+            (obj_loc_in_target, sub_loc_in_target))
+
+
+def tokenize(tokenizer: T5Tokenizer,
+             record: Mapping):
     """Tokenize the inputs and targets of a record"""
-    inputs = tokenizer(record['inputs_pretokenized'],
+    tokenized_inputs = tokenizer(
+                       record['inputs_pretokenized'],
                        return_tensors='pt',
                        max_length=2048,
-                       truncation=True,
-                       ).input_ids
+                       return_offsets_mapping=True,
+                       truncation=True,)
 
-    targets = tokenizer(record['targets_pretokenized'],
-                        return_tensors='pt').input_ids
+    inputs = tokenized_inputs.input_ids
+
+    tokenized_targets = tokenizer(record['targets_pretokenized'],
+                                  return_tensors='pt',
+                                  return_offsets_mapping=True)
+
+    targets = tokenized_targets.input_ids
 
     if not FLAGS.include_eos:
         targets = targets[:, :-1]
 
-    return {'inputs': inputs, 'targets': targets[:, :-1]}
+    # Fixme: it seems like we discard more than eos
+    # But this was the scores in the paper
+    output = {'inputs': inputs, 'targets': targets[:, :-1]}
+
+    if FLAGS.use_entity_locations and 'obj_surface' in record:
+        entity_locations = find_entity_locations(record)
+        entity_indices = find_entity_indices(tokenizer,
+                                             entity_locations,
+                                             tokenized_inputs,
+                                             tokenized_targets)
+        output['entity_indices'] = entity_indices
+
+    return output
+
+
+def find_entity_indices_single(tokenizer, location, tokenized_input):
+    output = [tokenized_input.char_to_token(location[0]),
+              tokenized_input.char_to_token(location[1]),
+              location[2]]
+    # if start position is None, the answer passage has been truncated
+    if output[0] is None:
+        output[0] = tokenizer.model_max_length
+
+    # if end position is None, the 'char_to_token' function points to the space before the correct token - > add + 1
+    if output[1] is None:
+        output[1] = tokenized_input.char_to_token(location[1] + 1)
+        if output[1] is None:
+            output[1] = output[0]
+    return output
+
+
+def find_entity_indices(tokenizer, entity_locations, tokenized_input, tokenized_target):
+    input_positions = []
+    for i, location in enumerate(entity_locations[0]):
+        if location is None:
+            continue
+        if location[0] is None or location[1] is None:
+            continue
+        input_positions.append(find_entity_indices_single(tokenizer, location, tokenized_input))
+
+    target_positions = []
+    for i, location in enumerate(entity_locations[1]):
+        if location is None:
+            continue
+        if location[0] is None or location[1] is None:
+            continue
+        target_positions.append(find_entity_indices_single(tokenizer, location, tokenized_target))
+
+    return (input_positions, target_positions)
 
 
 def get_gradients(model: MT5ForConditionalGeneration, data: Mapping):
@@ -82,18 +184,36 @@ def get_activations(model: MT5ForConditionalGeneration, data: Mapping):
     """Get Mapping[layer, activation] given input and targets"""
     activations = {}
     with torch.no_grad():
-        output = model(input_ids=data['inputs'].cuda(model.cuda_no),
-                       labels=data['targets'].cuda(model.cuda_no),
-                       output_hidden_states=True,
-                       )
+        output = model(input_ids=data['inputs'].cuda(model.cuda_no), labels=data['targets'].cuda(model.cuda_no), output_hidden_states=True)
+
+        if 'entity_indices' in data:
+            input_indices, output_indices = data['entity_indices']
+        else:
+            input_indices, output_indices = [], []
 
         for i, state in enumerate(output.encoder_hidden_states):
-            activations[f'activations.encoder.block.{i}'] = state.mean(dim=1).squeeze()
+            if input_indices:
+                activations[f'activations.encoder.block.{i}'] = 0
+                for location in input_indices:
+                    if location[1] < state.size(1):
+                        activations[f'activations.encoder.block.{i}'] += state[:, location[1], :].squeeze()
+                    else:
+                        activations[f'activations.encoder.block.{i}'] += state[:, -1, :].squeeze()
+            else:
+                activations[f'activations.encoder.block.{i}'] = state.mean(dim=1).squeeze()
 
         del output.encoder_hidden_states
 
         for i, state in enumerate(output.decoder_hidden_states):
-            activations[f'activations.decoder.block.{i}'] = state.mean(dim=1).squeeze()
+            if output_indices:
+                activations[f'activations.decoder.block.{i}'] = 0
+                for location in output_indices:
+                    if location[1] < state.size(1):
+                        activations[f'activations.decoder.block.{i}'] += state[:, location[1], :].squeeze()
+                    else:
+                        activations[f'activations.decoder.block.{i}'] += state[:, -1, :].squeeze()
+            else:
+                activations[f'activations.decoder.block.{i}'] = state.mean(dim=1).squeeze()
 
         del output
 
@@ -211,7 +331,7 @@ def main(_, score_fn=get_all_scores):
     with gzip.open(FLAGS.metrics_file, 'rb') as handle:
         original_result = pickle.load(handle)
 
-    tokenizer = T5Tokenizer.from_pretrained("google/mt5-base")
+    tokenizer = AutoTokenizer.from_pretrained("google/mt5-base")
 
     checkpoint_folder = FLAGS.checkpoint_folder
 

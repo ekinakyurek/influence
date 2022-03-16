@@ -200,7 +200,10 @@ def rerank_with_scores(abstracts: Sequence[Mapping],
                         typed_value /= num_typed_checkpoints
                         value += typed_value
                         count += 1
-                value /= count
+                if count != 0:
+                    value /= count
+                else:
+                    value = 0
             elif norm_type == "local":
                 value = 0.0
                 for pname in sum_pnames:

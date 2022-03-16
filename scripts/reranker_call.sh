@@ -3,7 +3,7 @@
 data_root=LAMA/data/
 nn_output_file=${data_root}/nns/bm25/unfiltered_bm25plus_nn_results_v3_sentence_level.jsonl
 metric_output_file=${data_root}/metrics/bm25/unfiltered_bm25plus_metrics_v3_sentence_level.pickle
-CUDA_VISIBLE_DEVICES=11,12,13,14
+CUDA_VISIBLE_DEVICES=10,11,12,13
 T5_PREFIX=${data_root}/T5_checkpoints/1000000/model/pytorch_model_
 checkpoint_folders="${T5_PREFIX}5100.bin,${T5_PREFIX}10200.bin,${T5_PREFIX}15300.bin,${T5_PREFIX}1000000.bin"
 
