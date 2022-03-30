@@ -1,46 +1,61 @@
+import glob
 import gzip
-import pickle
 import os
-from typing import Mapping, Optional, Sequence
-from absl import app
-from absl import flags
-import numpy as np
+import pickle
 import random
 from dataclasses import dataclass, field
-from absl import logging
+from typing import Mapping, Optional, Sequence
+import numpy as np
+from absl import app, flags, logging
 from tqdm import tqdm
-import glob
 from src.lama_utils import abs_to_str, get_sentence
+from src.metric_utils import (
+    K_EVALS,
+    average_metrics,
+    precision_recallv2,
+    reciprocal_rankv2,
+)
 
-from src.metric_utils import K_EVALS, average_metrics, precision_recallv2, reciprocal_rankv2
 
 FLAGS = flags.FLAGS
 
 
-flags.DEFINE_string('metrics_file', default=None,
-                    help='input metrics file that stores baseline '
-                         'statistics and (examples, nn abstracts)')
+flags.DEFINE_string(
+    "metrics_file",
+    default=None,
+    help=(
+        "input metrics file that stores baseline statistics and (examples, nn"
+        " abstracts)"
+    ),
+)
 
-flags.DEFINE_string('scores_folder', default=None,
-                    help='output file for experiment results')
+flags.DEFINE_string(
+    "scores_folder", default=None, help="output file for experiment results"
+)
 
-flags.DEFINE_string('output_metrics_file', default=None,
-                    help="where to output metrics")
+flags.DEFINE_string(
+    "output_metrics_file", default=None, help="where to output metrics"
+)
 
-flags.DEFINE_integer('seed', default=10,
-                     help="seed")
+flags.DEFINE_integer("seed", default=10, help="seed")
 
-flags.DEFINE_string('exp_type', default='layers',
-                    help="exp type either layers or linear combination")
+flags.DEFINE_string(
+    "exp_type",
+    default="layers",
+    help="exp type either layers or linear combination",
+)
 
-flags.DEFINE_float('alpha', default=0.0,
-                   help="Real reranker experiments, not the upper bound ones")
+flags.DEFINE_float(
+    "alpha",
+    default=0.0,
+    help="Real reranker experiments, not the upper bound ones",
+)
 
-flags.DEFINE_string('reweight_type', default=None,
-                    help="geometric vs arithmethic")
+flags.DEFINE_string(
+    "reweight_type", default=None, help="geometric vs arithmethic"
+)
 
-flags.DEFINE_boolean('disable_tqdm', False,
-                     help='Disable tqdm')
+flags.DEFINE_boolean("disable_tqdm", False, help="Disable tqdm")
 
 EPS = 1e-7
 
@@ -60,82 +75,131 @@ class LayerConfig:
 def get_all_layer_configs(num_layers=12, exp_type="layers"):
     """Returns configurations listed below"""
     if exp_type == "layers":
-        layer_configs = [LayerConfig(('gradients.shared',)),
-                         LayerConfig(('gradients.',))]
+        layer_configs = [
+            LayerConfig(("gradients.shared",)),
+            LayerConfig(("gradients.",)),
+        ]
 
-        layer_configs += [LayerConfig((f'gradients.encoder.block.{i}',
-                                       f'gradients.decoder.block.{i}'))
-                          for i in range(num_layers)]
+        layer_configs += [
+            LayerConfig(
+                (f"gradients.encoder.block.{i}", f"gradients.decoder.block.{i}")
+            )
+            for i in range(num_layers)
+        ]
 
-        layer_configs += [LayerConfig(('gradients.shared',
-                                       f'gradients.encoder.block.{i}',
-                                       f'gradients.decoder.block.{i}'))
-                          for i in range(num_layers)]
+        layer_configs += [
+            LayerConfig(
+                (
+                    "gradients.shared",
+                    f"gradients.encoder.block.{i}",
+                    f"gradients.decoder.block.{i}",
+                )
+            )
+            for i in range(num_layers)
+        ]
 
-        layer_configs += [LayerConfig((f'gradients.encoder.block.{i}', ))
-                          for i in range(num_layers)]
+        layer_configs += [
+            LayerConfig((f"gradients.encoder.block.{i}",))
+            for i in range(num_layers)
+        ]
 
-        layer_configs += [LayerConfig(('gradients.shared',
-                                       f'gradients.encoder.block.{i}'))
-                          for i in range(num_layers)]
+        layer_configs += [
+            LayerConfig(("gradients.shared", f"gradients.encoder.block.{i}"))
+            for i in range(num_layers)
+        ]
 
-        layer_configs += [LayerConfig((f'activations.encoder.block.{i}',
-                                       f'activations.decoder.block.{i}'))
-                          for i in range(num_layers + 1)]
+        layer_configs += [
+            LayerConfig(
+                (
+                    f"activations.encoder.block.{i}",
+                    f"activations.decoder.block.{i}",
+                )
+            )
+            for i in range(num_layers + 1)
+        ]
 
-        layer_configs += [LayerConfig((f'activations.encoder.block.{i}',))
-                          for i in range(num_layers + 1)]
+        layer_configs += [
+            LayerConfig((f"activations.encoder.block.{i}",))
+            for i in range(num_layers + 1)
+        ]
 
-        layer_configs += [LayerConfig(('activations.encoder.block.0',
-                                       'activations.decoder.block.0',
-                                       f'activations.encoder.block.{i}',
-                                       f'activations.decoder.block.{i}'))
-                          for i in range(1, num_layers+1)]
+        layer_configs += [
+            LayerConfig(
+                (
+                    "activations.encoder.block.0",
+                    "activations.decoder.block.0",
+                    f"activations.encoder.block.{i}",
+                    f"activations.decoder.block.{i}",
+                )
+            )
+            for i in range(1, num_layers + 1)
+        ]
 
-        layer_configs += [LayerConfig(('activations.encoder.block.0',
-                                       f'activations.encoder.block.{i}',
-                                       f'activations.decoder.block.{i}'))
-                          for i in range(1, num_layers+1)]
+        layer_configs += [
+            LayerConfig(
+                (
+                    "activations.encoder.block.0",
+                    f"activations.encoder.block.{i}",
+                    f"activations.decoder.block.{i}",
+                )
+            )
+            for i in range(1, num_layers + 1)
+        ]
 
-        layer_configs.append(LayerConfig(('activations.', )))
-        layer_configs.append(LayerConfig(('activations.', 'gradients.')))
-        layer_configs.append(LayerConfig(('activations.encoder.block.0',
-                                          'activations.decoder.block.0',
-                                          'gradients.shared')))
-        layer_configs.append(LayerConfig(('activations.encoder.block.0',
-                                          'gradients.shared')))
+        layer_configs.append(LayerConfig(("activations.",)))
+        layer_configs.append(LayerConfig(("activations.", "gradients.")))
+        layer_configs.append(
+            LayerConfig(
+                (
+                    "activations.encoder.block.0",
+                    "activations.decoder.block.0",
+                    "gradients.shared",
+                )
+            )
+        )
+        layer_configs.append(
+            LayerConfig(("activations.encoder.block.0", "gradients.shared"))
+        )
     else:
         layer_configs = []
         index = 0
         for a in np.linspace(-5, 5, num=10):
             for b in np.linspace(-5, 5, num=10):
-                layer_configs.append(LayerConfig(
-                                ('activations.encoder.block.0',
-                                 'activations.decoder.block.0',
-                                 'gradients.shared'),
-                                [a, b, 1.0],
-                                index=index))
+                layer_configs.append(
+                    LayerConfig(
+                        (
+                            "activations.encoder.block.0",
+                            "activations.decoder.block.0",
+                            "gradients.shared",
+                        ),
+                        [a, b, 1.0],
+                        index=index,
+                    )
+                )
                 index += 1
         for a in (0.0, 1.0):
             for b in (0.0, 1.0):
-                layer_configs.append(LayerConfig(
-                                ('activations.encoder.block.0',
-                                 'activations.decoder.block.0',
-                                 'gradients.shared'),
-                                [a, b, 1.0],
-                                index=index))
+                layer_configs.append(
+                    LayerConfig(
+                        (
+                            "activations.encoder.block.0",
+                            "activations.decoder.block.0",
+                            "gradients.shared",
+                        ),
+                        [a, b, 1.0],
+                        index=index,
+                    )
+                )
                 index += 1
     return layer_configs
 
 
-def evaluate(example,
-             abstracts,
-             fact_abstracts,
-             collapse=False):
+def evaluate(example, abstracts, fact_abstracts, collapse=False):
     """Evaluate nearast abstracts to get the metrics"""
     if collapse:
-        _, idxs = np.unique(list(map(get_sentence, fact_abstracts)),
-                            return_index=True)
+        _, idxs = np.unique(
+            list(map(get_sentence, fact_abstracts)), return_index=True
+        )
         fact_abstracts = [fact_abstracts[id] for id in idxs]
 
     if len(fact_abstracts) == 0:
@@ -143,42 +207,48 @@ def evaluate(example,
         return None, None, None
 
     # nn_ids = [a['page_uri'] for a in abstracts]
-    precision, recall = precision_recallv2(abstracts,
-                                           fact_abstracts,
-                                           check_correct,
-                                           ks=K_EVALS,
-                                           collapse=collapse)
-    rr = reciprocal_rankv2(abstracts,
-                           fact_abstracts,
-                           check_correct,
-                           collapse=collapse)
+    precision, recall = precision_recallv2(
+        abstracts, fact_abstracts, check_correct, ks=K_EVALS, collapse=collapse
+    )
+    rr = reciprocal_rankv2(
+        abstracts, fact_abstracts, check_correct, collapse=collapse
+    )
 
     return precision, recall, rr
 
 
-def rerank_with_scores(abstracts: Sequence[Mapping],
-                       layer_scores: Mapping,
-                       layers: Optional[LayerConfig] = None,
-                       collapse: bool = False,
-                       normalize: bool = False,
-                       norm_type: str = "global",
-                       baseline_scores: np.array = None,
-                       reweight_type: Optional[str] = None,
-                       alpha: float = 0.0):
+def rerank_with_scores(
+    abstracts: Sequence[Mapping],
+    layer_scores: Mapping,
+    layers: Optional[LayerConfig] = None,
+    collapse: bool = False,
+    normalize: bool = False,
+    norm_type: str = "global",
+    baseline_scores: np.array = None,
+    reweight_type: Optional[str] = None,
+    alpha: float = 0.0,
+):
     """Given layers prefixes we sum scores of these layers
-       and rerank the abstracts"""
+    and rerank the abstracts"""
 
     if layers is not None:
         # Assuming our layer configurations provide prefix codes
         def findindex(key):
-            indices = np.where([key.startswith(layer)
-                                for layer in layers.layer_prefixes])
+            indices = np.where(
+                [key.startswith(layer) for layer in layers.layer_prefixes]
+            )
             return indices[0]
-        sum_pnames = [pname for pname in layer_scores[0].keys()
-                      if len(findindex(pname)) > 0]
 
-        w_weights = {pname: layers.layer_weights[findindex(pname)[0]]
-                     for pname in sum_pnames}
+        sum_pnames = [
+            pname
+            for pname in layer_scores[0].keys()
+            if len(findindex(pname)) > 0
+        ]
+
+        w_weights = {
+            pname: layers.layer_weights[findindex(pname)[0]]
+            for pname in sum_pnames
+        }
     else:
         sum_pnames = list(layer_scores[0].keys())
         w_weights = {pname: 1.0 for pname in sum_pnames}
@@ -191,11 +261,13 @@ def rerank_with_scores(abstracts: Sequence[Mapping],
                 value = 0.0
                 count = 0.0
                 for ptype in ("activations", "gradients"):
-                    sum_pnames_typed = [pname for pname in sum_pnames
-                                        if pname.startswith(ptype)]
+                    sum_pnames_typed = [
+                        pname for pname in sum_pnames if pname.startswith(ptype)
+                    ]
                     if len(sum_pnames_typed) > 0:
-                        num_typed_checkpoints =\
-                            len(query_scores[sum_pnames_typed[0]])
+                        num_typed_checkpoints = len(
+                            query_scores[sum_pnames_typed[0]]
+                        )
                         typed_value = 0.0
 
                         for i in range(num_typed_checkpoints):
@@ -204,12 +276,13 @@ def rerank_with_scores(abstracts: Sequence[Mapping],
 
                             for pname in sum_pnames_typed:
                                 score = query_scores[pname][i]
-                                ckpt_value[0] += (score[0] * w_weights[pname])
+                                ckpt_value[0] += score[0] * w_weights[pname]
                                 ckpt_value[1][0] += score[1][0]
                                 ckpt_value[1][1] += score[1][1]
 
-                            ckpt_value =\
-                                ckpt_value[0] / np.prod(np.sqrt(ckpt_value[1]))
+                            ckpt_value = ckpt_value[0] / np.prod(
+                                np.sqrt(ckpt_value[1])
+                            )
                             typed_value += ckpt_value
 
                         typed_value /= num_typed_checkpoints
@@ -226,10 +299,11 @@ def rerank_with_scores(abstracts: Sequence[Mapping],
                     for score in query_scores[pname]:
                         pname_value += score[0] / np.prod(np.sqrt(score[1]))
                     pname_value /= len(query_scores[pname])
-                    value += (pname_value * w_weights[pname])
+                    value += pname_value * w_weights[pname]
             else:
-                raise ValueError(f"{norm_type} is an unknown "
-                                 f"normalization type")
+                raise ValueError(
+                    f"{norm_type} is an unknown normalization type"
+                )
         else:
             value = 0.0
             for pname in sum_pnames:
@@ -237,7 +311,7 @@ def rerank_with_scores(abstracts: Sequence[Mapping],
                 for score in query_scores[pname]:
                     pname_value += score[0]
                 pname_value /= len(query_scores[pname])
-                value += (pname_value * w_weights[pname])
+                value += pname_value * w_weights[pname]
 
         # mean over checkpoints
         abstract_scores.append(value)
@@ -248,10 +322,12 @@ def rerank_with_scores(abstracts: Sequence[Mapping],
     if reweight_type is not None and baseline_scores is not None:
         scores[scores < 0] = 0
         if reweight_type == "geometric":
-            scores = np.exp((1.0-alpha) * np.log(scores + 1e-10) +
-                            alpha * np.log(baseline_scores + 1e-10))
+            scores = np.exp(
+                (1.0 - alpha) * np.log(scores + 1e-10)
+                + alpha * np.log(baseline_scores + 1e-10)
+            )
         else:
-            scores = (1.0-alpha) * scores + alpha * baseline_scores
+            scores = (1.0 - alpha) * scores + alpha * baseline_scores
 
     # merge abstracts and scores here
     if collapse:
@@ -264,8 +340,9 @@ def rerank_with_scores(abstracts: Sequence[Mapping],
     return abstracts_reranked, scores_reranked
 
 
-def collapse_abstracts_and_scores(scores: Sequence[float],
-                                  abstracts: Sequence[Mapping]):
+def collapse_abstracts_and_scores(
+    scores: Sequence[float], abstracts: Sequence[Mapping]
+):
     uri_to_indices = {}
     for i, a in enumerate(abstracts):
         uri = get_sentence(a)
@@ -288,25 +365,27 @@ def check_equal(a1: Mapping, a2: Mapping, collapse: bool):
     if collapse:
         return get_sentence(a1) == get_sentence(a2)
     else:
-        return a1['sentence_uris'] == a2['sentence_uris']
+        return a1["sentence_uris"] == a2["sentence_uris"]
 
 
-def check_correct(a1: Mapping,
-                  fact_abstracts: Sequence[Mapping],
-                  collapse: bool):
+def check_correct(
+    a1: Mapping, fact_abstracts: Sequence[Mapping], collapse: bool
+):
     return any((check_equal(a1, a, collapse) for a in fact_abstracts))
 
 
-def run_all_layer_configs(samples,
-                          scores,
-                          num_layers=12,
-                          reweight_type=None,
-                          alpha=0.0,
-                          exp_type="layers",
-                          norm_type="global"):
+def run_all_layer_configs(
+    samples,
+    scores,
+    num_layers=12,
+    reweight_type=None,
+    alpha=0.0,
+    exp_type="layers",
+    norm_type="global",
+):
 
     """Runs reranking experiments for all configurations
-       listed below and returns the results"""
+    listed below and returns the results"""
 
     assert len(scores) == len(samples), f"{len(scores)} vs {len(samples)}"
 
@@ -314,24 +393,29 @@ def run_all_layer_configs(samples,
 
     layer_configs = get_all_layer_configs(num_layers, exp_type)
 
-    results = {'cosine': {}, 'dot': {}}
+    results = {"cosine": {}, "dot": {}}
 
     for (index, sample) in enumerate(tqdm(samples, disable=FLAGS.disable_tqdm)):
-        query = sample['example']
-        abstracts = sample['nn_abstracts'] + sample['fact_abstracts'] + sample['distractors']
+        query = sample["example"]
+        abstracts = (
+            sample["nn_abstracts"]
+            + sample["fact_abstracts"]
+            + sample["distractors"]
+        )
         rng = np.random.default_rng(0)
         rng.shuffle(abstracts)
-        _, indices = np.unique(list(map(abs_to_str, abstracts)),
-                               return_index=True)
+        _, indices = np.unique(
+            list(map(abs_to_str, abstracts)), return_index=True
+        )
         abstracts = [abstracts[ind] for ind in indices]
 
         baseline_scores = []
-        nn_identifiers = list(map(abs_to_str, sample['nn_abstracts']))
+        nn_identifiers = list(map(abs_to_str, sample["nn_abstracts"]))
         for abstract in abstracts:
             abstract_identifier = abs_to_str(abstract)
             try:
                 ind = nn_identifiers.index(abstract_identifier)
-                baseline_scores.append(sample['nn']['scores'][ind])
+                baseline_scores.append(sample["nn"]["scores"][ind])
             except ValueError:
                 baseline_scores.append(0.0)
         baseline_scores = np.array(baseline_scores)
@@ -345,13 +429,13 @@ def run_all_layer_configs(samples,
             if norm_type == "global" and k == "dot":
                 continue
 
-            for method in ('collapse', 'full'):  # eval methods
+            for method in ("collapse", "full"):  # eval methods
 
                 if method not in result:
                     result[method] = {}
 
-                is_collapse = (method == 'collapse')
-                is_normalized = (k == 'cosine')
+                is_collapse = method == "collapse"
+                is_normalized = k == "cosine"
 
                 for config in layer_configs:
 
@@ -364,47 +448,52 @@ def run_all_layer_configs(samples,
                         result[method][config_name] = []
 
                     abstracts_config, scores_config = rerank_with_scores(
-                                            abstracts,
-                                            score,
-                                            layers=config,
-                                            collapse=is_collapse,
-                                            normalize=is_normalized,
-                                            norm_type=norm_type,
-                                            baseline_scores=baseline_scores,
-                                            reweight_type=reweight_type,
-                                            alpha=alpha)
+                        abstracts,
+                        score,
+                        layers=config,
+                        collapse=is_collapse,
+                        normalize=is_normalized,
+                        norm_type=norm_type,
+                        baseline_scores=baseline_scores,
+                        reweight_type=reweight_type,
+                        alpha=alpha,
+                    )
 
-                    precision, recall, rr = evaluate(query,
-                                                     abstracts_config,
-                                                     sample['fact_abstracts'],
-                                                     collapse=is_collapse)
+                    precision, recall, rr = evaluate(
+                        query,
+                        abstracts_config,
+                        sample["fact_abstracts"],
+                        collapse=is_collapse,
+                    )
 
                     if precision is not None:
-                        result[method][config_name].append({
-                            "index": index,
-                            "precision": precision,
-                            "recall": recall,
-                            "rr": rr,
-                            "nn_abstracts": abstracts_config[:100],
-                            "nn_scores": scores_config[:100].tolist(),
-                            "weights": config.layer_weights,
-                        })
+                        result[method][config_name].append(
+                            {
+                                "index": index,
+                                "precision": precision,
+                                "recall": recall,
+                                "rr": rr,
+                                "nn_abstracts": abstracts_config[:100],
+                                "nn_scores": scores_config[:100].tolist(),
+                                "weights": config.layer_weights,
+                            }
+                        )
                     else:
-                        logging.warning(
-                            f"metrics are none in method: {method}")
+                        logging.warning(f"metrics are none in method: {method}")
 
-    metrics = {'cosine': {}, 'dot': {}}
+    metrics = {"cosine": {}, "dot": {}}
     for k, result in results.items():
         for (method_name, res) in result.items():
             metrics[k][method_name] = {}
             for (config_name, r) in res.items():
                 average_result = average_metrics(r)
                 metrics[k][method_name][config_name] = average_result
-                logging.info(f"{config_name}\t{method_name}\t"
-                             f"{k}\t{average_result['mrr']}")
+                logging.info(
+                    f"{config_name}\t{method_name}\t{k}\t{average_result['mrr']}"
+                )
 
     if norm_type == "global":
-        metrics.pop('dot')
+        metrics.pop("dot")
 
     return metrics
 
@@ -416,29 +505,30 @@ def main(_):
     np.random.seed(FLAGS.seed)
     random.seed(FLAGS.seed)
 
-    with gzip.open(FLAGS.metrics_file, 'rb') as handle:
+    with gzip.open(FLAGS.metrics_file, "rb") as handle:
         metrics = pickle.load(handle)
 
     try:
-        logging.info(f"bm25plus mrr:  "
-                     f"{metrics['evals']['bm25plus']['collapse']['mrr']}")
+        logging.info(
+            f"bm25plus mrr:  {metrics['evals']['bm25plus']['collapse']['mrr']}"
+        )
     except KeyError:
         logging.info("cannot print baseline scores")
 
-    samples = metrics['samples']
+    samples = metrics["samples"]
 
-    score_files = glob.glob(os.path.join(
-                             FLAGS.scores_folder,
-                             "*.pickle"))
+    score_files = glob.glob(os.path.join(FLAGS.scores_folder, "*.pickle"))
     logging.info(f"score files {repr(score_files)}")
     scores = None
     for score_file in score_files:
-        with gzip.open(score_file, 'rb') as handle:
+        with gzip.open(score_file, "rb") as handle:
             # queries[abstracts[params[dotproducts]]]
             ckpt_scores = pickle.load(handle)
             if scores is None:
-                scores = [[{} for _ in abstract_scores]
-                          for abstract_scores in ckpt_scores]
+                scores = [
+                    [{} for _ in abstract_scores]
+                    for abstract_scores in ckpt_scores
+                ]
 
             for i, abstract_scores in enumerate(ckpt_scores):
                 for j, score in enumerate(abstract_scores):
@@ -448,32 +538,40 @@ def main(_):
                         else:
                             scores[i][j][pname].append(value)
 
-    global_metrics = run_all_layer_configs(samples,
-                                           scores,
-                                           exp_type=FLAGS.exp_type,
-                                           reweight_type=FLAGS.reweight_type,
-                                           alpha=FLAGS.alpha,
-                                           norm_type="global")
+    global_metrics = run_all_layer_configs(
+        samples,
+        scores,
+        exp_type=FLAGS.exp_type,
+        reweight_type=FLAGS.reweight_type,
+        alpha=FLAGS.alpha,
+        norm_type="global",
+    )
 
-    local_metrics = run_all_layer_configs(samples,
-                                          scores,
-                                          exp_type=FLAGS.exp_type,
-                                          reweight_type=FLAGS.reweight_type,
-                                          alpha=FLAGS.alpha,
-                                          norm_type="local")
+    local_metrics = run_all_layer_configs(
+        samples,
+        scores,
+        exp_type=FLAGS.exp_type,
+        reweight_type=FLAGS.reweight_type,
+        alpha=FLAGS.alpha,
+        norm_type="local",
+    )
 
-    for name, new_metrics in (("global", global_metrics),
-                              ("local", local_metrics)):
-        if name not in metrics['evals']:
-            metrics['evals'][name] = {}
+    for name, new_metrics in (
+        ("global", global_metrics),
+        ("local", local_metrics),
+    ):
+        if name not in metrics["evals"]:
+            metrics["evals"][name] = {}
             for k, results in new_metrics.items():
-                if k not in metrics['evals'][name]:
-                    metrics['evals'][name][k] = {}
+                if k not in metrics["evals"][name]:
+                    metrics["evals"][name][k] = {}
                 for key, result in results.items():
-                    metrics['evals'][name][k][key] = result
+                    metrics["evals"][name][k][key] = result
 
     if FLAGS.reweight_type is not None:
-        FLAGS.output_metrics_file += f'_{FLAGS.reweight_type}_reweight_{FLAGS.alpha}_'
+        FLAGS.output_metrics_file += (
+            f"_{FLAGS.reweight_type}_reweight_{FLAGS.alpha}_"
+        )
 
     logging.info(f"Logging to {FLAGS.output_metrics_file}")
 
@@ -481,5 +579,5 @@ def main(_):
         pickle.dump(metrics, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(main)

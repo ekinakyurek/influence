@@ -1,62 +1,63 @@
-import json
 import asyncio
-import torch  # TODO(ekina): make this jax
-from absl import app
-from absl import flags
+import json
 import numpy as np
+import torch  # TODO(ekina): make this jax
+from absl import app, flags
 from tqdm import tqdm
-
-from src.tf_utils import tf
-from src.tf_utils import get_tfexample_decoder_old
-from src.tf_utils import get_index_decoder
 from src.linalg_utils import normalize_segments
+from src.tf_utils import get_index_decoder, get_tfexample_decoder_old, tf
 
 
 FLAGS = flags.FLAGS
 
 
-flags.DEFINE_string('abstract_vectors', default=None,
-                    help='input file path to convert')
+flags.DEFINE_string(
+    "abstract_vectors", default=None, help="input file path to convert"
+)
 
-flags.DEFINE_string('test_vectors', default=None,
-                    help='input file path to convert')
+flags.DEFINE_string(
+    "test_vectors", default=None, help="input file path to convert"
+)
 
-flags.DEFINE_string('output_file', default=None,
-                    help='output file path to writer neighbours')
+flags.DEFINE_string(
+    "output_file", default=None, help="output file path to writer neighbours"
+)
 
-flags.DEFINE_integer('gpu_workers', default=4,
-                     help='number of gpus to distribute')
+flags.DEFINE_integer(
+    "gpu_workers", default=4, help="number of gpus to distribute"
+)
 
-flags.DEFINE_integer('feature_size', default=4*2048,
-                     help='size of vectors')
+flags.DEFINE_integer("feature_size", default=4 * 2048, help="size of vectors")
 
-flags.DEFINE_integer('batch_size', default=10,
-                     help='batch size to process at once')
+flags.DEFINE_integer(
+    "batch_size", default=10, help="batch size to process at once"
+)
 
-flags.DEFINE_integer('topk', default=100,
-                     help='batch size to process at once')
+flags.DEFINE_integer("topk", default=100, help="batch size to process at once")
 
-flags.DEFINE_integer('global_offset', default=0,
-                     help='global offset of current vectors')
+flags.DEFINE_integer(
+    "global_offset", default=0, help="global offset of current vectors"
+)
 
-flags.DEFINE_integer('fake_data_size', default=None,
-                     help='fake data size to test this code')
+flags.DEFINE_integer(
+    "fake_data_size", default=None, help="fake data size to test this code"
+)
 
-flags.DEFINE_bool('normalize', default=False,
-                  help="normalize embeddings")
+flags.DEFINE_bool("normalize", default=False, help="normalize embeddings")
 
 
-def load_a_shard_from_tfrecord(dataset,
-                               feature_length,
-                               positions,
-                               normalize=False):
+def load_a_shard_from_tfrecord(
+    dataset, feature_length, positions, normalize=False
+):
     """Loads one shard of a dataset from the dataset file."""
     shard_length = positions[1] - positions[0]
-    ds_loader = dataset.skip(positions[0])\
-                       .take(shard_length)\
-                       .map(get_tfexample_decoder_old(feature_length))\
-                       .batch(shard_length, num_parallel_calls=4)\
-                       .as_numpy_iterator()
+    ds_loader = (
+        dataset.skip(positions[0])
+        .take(shard_length)
+        .map(get_tfexample_decoder_old(feature_length))
+        .batch(shard_length, num_parallel_calls=4)
+        .as_numpy_iterator()
+    )
 
     X = next(iter(ds_loader))
     X = torch.from_numpy(X)
@@ -65,13 +66,12 @@ def load_a_shard_from_tfrecord(dataset,
     return X
 
 
-def load_a_shard_from_numpy(np_file,
-                            feature_length,
-                            positions,
-                            normalize=False):
+def load_a_shard_from_numpy(
+    np_file, feature_length, positions, normalize=False
+):
     """Loads one shard of a dataset from the dataset file."""
-    X = np.load(np_file, mmap_mode='r')
-    X = torch.from_numpy(X[positions[0]:positions[1], :])
+    X = np.load(np_file, mmap_mode="r")
+    X = torch.from_numpy(X[positions[0] : positions[1], :])
     if normalize:
         X = normalize_segments(X)
     return X
@@ -105,10 +105,13 @@ def create_dummy_numpy_dataset(output_file, n, feature_size):
 
 
 def sharded_open(filename):
-    if '@' in filename:
-        prefix, no_shards = filename.split('@')
+    if "@" in filename:
+        prefix, no_shards = filename.split("@")
         no_shards = int(no_shards)
-        filenames = [f'{prefix}-{str(i).zfill(5)}-of-{str(no_shards).zfill(5)}' for i in range(no_shards)]
+        filenames = [
+            f"{prefix}-{str(i).zfill(5)}-of-{str(no_shards).zfill(5)}"
+            for i in range(no_shards)
+        ]
         dataset = tf.data.TFRecordDataset(filenames=filenames)
     else:
         dataset = tf.data.TFRecordDataset(filename)
@@ -121,8 +124,11 @@ async def _prepare_shards(args):
     #  dataset = args.abstract_vectors
     # Create a dictionary describing the features.
     dataset = sharded_open(args.abstract_vectors)
+
     async def get_a_shard(i, index):
-        shard = load_a_shard_from_tfrecord(dataset, args.feature_size, index, normalize=FLAGS.normalize).cuda(i, non_blocking=True)
+        shard = load_a_shard_from_tfrecord(
+            dataset, args.feature_size, index, normalize=FLAGS.normalize
+        ).cuda(i, non_blocking=True)
 
         return shard
 
@@ -168,15 +174,21 @@ def main(_):
 
     shards, positions = asyncio.run(_prepare_shards(FLAGS))
     print("reading abstract vectors from: ", FLAGS.abstract_vectors)
-    abstract_indices = get_indices(sharded_open(FLAGS.abstract_vectors), FLAGS.feature_size)
+    abstract_indices = get_indices(
+        sharded_open(FLAGS.abstract_vectors), FLAGS.feature_size
+    )
 
     # create_dummy_tfrecord_dataset(FLAGS.test_vectors, 100, FLAGS.feature_size)
-    test_indices = get_indices(sharded_open(FLAGS.test_vectors), FLAGS.feature_size)
+    test_indices = get_indices(
+        sharded_open(FLAGS.test_vectors), FLAGS.feature_size
+    )
     test_dataset = sharded_open(FLAGS.test_vectors)
 
-    test_loader = test_dataset.map(get_tfexample_decoder_old(FLAGS.feature_size))\
-                              .batch(FLAGS.batch_size)\
-                              .as_numpy_iterator()
+    test_loader = (
+        test_dataset.map(get_tfexample_decoder_old(FLAGS.feature_size))
+        .batch(FLAGS.batch_size)
+        .as_numpy_iterator()
+    )
 
     results = []
     for batch in tqdm(test_loader):
@@ -185,14 +197,15 @@ def main(_):
         if FLAGS.normalize:
             batch = normalize_segments(batch)
 
-        scores, idxs = asyncio.run(nn_retrieve(shards,
-                                               batch,
-                                               positions,
-                                               k=FLAGS.topk))
+        scores, idxs = asyncio.run(
+            nn_retrieve(shards, batch, positions, k=FLAGS.topk)
+        )
         # idxs = idxs + FLAGS.global_offset
         for i in range(scores.shape[-1]):
-            line = {'scores': scores[:, i].tolist(),
-                    'neighbor_ids': abstract_indices[idxs[:, i]].tolist()}
+            line = {
+                "scores": scores[:, i].tolist(),
+                "neighbor_ids": abstract_indices[idxs[:, i]].tolist(),
+            }
             results.append(line)
 
     results = [results[i] for i in np.argsort(test_indices)]
@@ -202,5 +215,5 @@ def main(_):
             print(json.dumps(res), file=f)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app.run(main)

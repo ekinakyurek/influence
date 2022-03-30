@@ -1,21 +1,25 @@
-import os
-import sys
-import random
 import argparse
 import json
+import os
+import random
+import sys
 import numpy as np
 import torch
 
 
-parser = argparse.ArgumentParser(description='Process some integers.')
-parser.add_argument('--save_dir_root', type=str, default='./data/TREx_lama_templates_v3/')
-parser.add_argument('--dataset', type=str, default='trex')
-parser.add_argument('--seed', type=int, default=42)
-parser.add_argument('--relation_mode', type=str, default='template')
-parser.add_argument('--template_source', type=str, default='lama')  # Lama or lpaqa or default (=>)
+parser = argparse.ArgumentParser(description="Process some integers.")
+parser.add_argument(
+    "--save_dir_root", type=str, default="./data/TREx_lama_templates_v3/"
+)
+parser.add_argument("--dataset", type=str, default="trex")
+parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--relation_mode", type=str, default="template")
+parser.add_argument(
+    "--template_source", type=str, default="lama"
+)  # Lama or lpaqa or default (=>)
 
 args = parser.parse_args()
-args.command = ' '.join(sys.argv)
+args.command = " ".join(sys.argv)
 
 
 def parse_template(template, sample, subject_label, object_label):
@@ -23,8 +27,8 @@ def parse_template(template, sample, subject_label, object_label):
     OBJ_SYMBOL = "[Y]"
     template = template.replace(SUBJ_SYMBOL, subject_label)
     template = template.replace(OBJ_SYMBOL, object_label)
-    if '[Z]' in template:
-        template = template.replace('[Z]', sample['aux_label'])
+    if "[Z]" in template:
+        template = template.replace("[Z]", sample["aux_label"])
     return [template]
 
 
@@ -37,7 +41,7 @@ def load_file(filename):
 
 
 def set_seed(args):
-    print('setting all seed to', args.seed)
+    print("setting all seed to", args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     random.seed(args.seed)
@@ -54,16 +58,22 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, args):
     final_d = {}
 
     for r_count, relation in enumerate(relations):
-        print('(load_and_prepare_data) relation idx:', r_count)
-  
-        load_fn = "{}{}{}".format(data_path_pre, relation["relation"], data_path_post)
+        print("(load_and_prepare_data) relation idx:", r_count)
 
-        print('loading %s', load_fn)
+        load_fn = "{}{}{}".format(
+            data_path_pre, relation["relation"], data_path_post
+        )
+
+        print("loading %s", load_fn)
         # see if file exists
         try:
             all_samples = load_file(load_fn)
         except Exception as e:
-            print("Relation {} excluded because the file does not exist.".format(relation["relation"]))
+            print(
+                "Relation {} excluded because the file does not exist.".format(
+                    relation["relation"]
+                )
+            )
             print("Exception: {}".format(e))
             continue
 
@@ -79,7 +89,7 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, args):
             for sample in all_samples:
                 sub = sample["sub_label"]
                 obj = sample["obj_label"]
-                aux = sample['aux_label'] if 'aux_label' in sample else ''
+                aux = sample["aux_label"] if "aux_label" in sample else ""
                 if (sub, obj, aux) not in facts:
                     facts.append((sub, obj, aux))
                     added_samples.append(sample)
@@ -93,51 +103,66 @@ def load_and_prepare_data(relations, data_path_pre, data_path_post, args):
                 sample["sub_label"] = sub
                 sample["obj_label"] = obj
                 if len(aux) > 0:
-                    sample['aux_label'] = aux
-                sample['template'] = template_cur
-                sample["templated_sentences"] = parse_template(template_cur,
-                                                               sample,
-                                                               sample["sub_label"].strip(), 
-                                                               "<mask>")
-                if args.relation_mode == 'template':
-                    sample["masked_sentences"] = parse_template(template_cur, sample, sample["sub_label"].strip(), "<mask>")
-              
-                sample['relation'] = relation
+                    sample["aux_label"] = aux
+                sample["template"] = template_cur
+                sample["templated_sentences"] = parse_template(
+                    template_cur, sample, sample["sub_label"].strip(), "<mask>"
+                )
+                if args.relation_mode == "template":
+                    sample["masked_sentences"] = parse_template(
+                        template_cur,
+                        sample,
+                        sample["sub_label"].strip(),
+                        "<mask>",
+                    )
+
+                sample["relation"] = relation
                 all_samples.append(sample)
 
         for sample in all_samples:
-            sample['masked_sentence_ori'] = sample['masked_sentences'][0]
+            sample["masked_sentence_ori"] = sample["masked_sentences"][0]
 
         split_d = {}  # split_d contains the final split results
         random.shuffle(all_samples)
-    
+
         samples_d = {}
         for sample in all_samples:
-            assert(len(sample['masked_sentences']) == 1)
-            ms = sample['masked_sentence_ori']
-            if not ms in samples_d:
-                sample['obj_labels'] = [sample['obj_label']]
+            assert len(sample["masked_sentences"]) == 1
+            ms = sample["masked_sentence_ori"]
+            if ms not in samples_d:
+                sample["obj_labels"] = [sample["obj_label"]]
                 samples_d[ms] = sample
             else:
-                samples_d[ms]['obj_labels'].append(sample['obj_label'])
-      
-        print('len of samples after merging', len(samples_d), 'original number of samples:', len(all_samples))
-    
+                samples_d[ms]["obj_labels"].append(sample["obj_label"])
+
+        print(
+            "len of samples after merging",
+            len(samples_d),
+            "original number of samples:",
+            len(all_samples),
+        )
+
         for ms in samples_d:
-            if len(samples_d[ms]['obj_labels']) > 1:
-                print('debug: a sample of multiple-targets', samples_d[ms])
+            if len(samples_d[ms]["obj_labels"]) > 1:
+                print("debug: a sample of multiple-targets", samples_d[ms])
                 break
-          
+
         all_samples = list(samples_d.values())
-        split_d['test_samples'] = all_samples
-        print('!!! relation: %s num test_samples: %d', relation['relation'], len(all_samples))
-        final_d[relation['relation']] = split_d
-    
+        split_d["test_samples"] = all_samples
+        print(
+            "!!! relation: %s num test_samples: %d",
+            relation["relation"],
+            len(all_samples),
+        )
+        final_d[relation["relation"]] = split_d
+
     for (k, v) in final_d.items():
-        with open(os.path.join(args.save_dir_root, f'{k}.jsonl'), "w") as out_file:
-            for example in final_d[k]['test_samples']:
+        with open(
+            os.path.join(args.save_dir_root, f"{k}.jsonl"), "w"
+        ) as out_file:
+            for example in final_d[k]["test_samples"]:
                 json.dump(example, out_file)
-                out_file.write('\n')
+                out_file.write("\n")
 
     return final_d
 
@@ -161,13 +186,13 @@ def get_TREx_parameters(data_path_pre="data/"):
 def run(parameters, d_n, given_args=None):
     args = given_args
     args.save_dir = args.save_dir_root
-    os.system('mkdir -p ' + args.save_dir)
+    os.system("mkdir -p " + args.save_dir)
     set_seed(args)
     run_experiments(*parameters, given_args=args)
-    print('re-print args', str(args))
+    print("re-print args", str(args))
 
 
 if __name__ == "__main__":
     parameters = get_TREx_parameters()
-    run(parameters, 'trex', given_args=args)
-    print('%s', str(args))
+    run(parameters, "trex", given_args=args)
+    print("%s", str(args))

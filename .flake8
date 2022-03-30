@@ -4,6 +4,7 @@ max-line-length = 80
 ignore =
     E203,   # Black default for colon/whitespace handling...
     E501,   # Line length issues... black takes care of code, but comments/markdown are not handled
+    W503,
 
 per-file-ignores =
     */__init__.py: F401

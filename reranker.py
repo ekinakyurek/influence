@@ -2,33 +2,46 @@ import os
 import pathlib
 import subprocess
 import time
-
 from absl import app, flags, logging
+
 
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string(
     "metrics_file",
     default=None,
-    help="input metrics file that stores baseline statistics and (examples, nn abstracts)",
+    help=(
+        "input metrics file that stores baseline statistics and (examples, nn"
+        " abstracts)"
+    ),
 )
 
 flags.DEFINE_string(
-    "baseline_metrics_file", default=None, help="output file for experiment results"
+    "baseline_metrics_file",
+    default=None,
+    help="output file for experiment results",
 )
-
-flags.DEFINE_string("baseline_nn_file", default=None, help="nn for baseline file")
 
 flags.DEFINE_string(
-    "checkpoint_folders", default=None, help="last checkpoint of the model to evaluate"
+    "baseline_nn_file", default=None, help="nn for baseline file"
 )
 
-flags.DEFINE_integer("beam_size", default=3, help="beam size for accuracy calculations")
+flags.DEFINE_string(
+    "checkpoint_folders",
+    default=None,
+    help="last checkpoint of the model to evaluate",
+)
+
+flags.DEFINE_integer(
+    "beam_size", default=3, help="beam size for accuracy calculations"
+)
 
 flags.DEFINE_integer("seed", default=10, help="seed")
 
 flags.DEFINE_float(
-    "baseline_reweight", default=-1, help="ensemble with reweighted baseline scores"
+    "baseline_reweight",
+    default=-1,
+    help="ensemble with reweighted baseline scores",
 )
 
 flags.DEFINE_string("data_root", default="LAMA/data/", help="data folder")
@@ -62,7 +75,7 @@ def wait_for_files(files):
 
 
 def assign_to_gpu(gpus, file):
-    logging.info(f"waiting for empty gpu" f" for {file}")
+    logging.info(f"waiting for empty gpu for {file}")
     while True:
         for (k, v) in gpus.items():
             if len(v) == 0:
@@ -78,9 +91,13 @@ def assign_to_gpu(gpus, file):
 
 def main(_):
     uri_file = os.path.join(FLAGS.lama_folder, "abstracts", "all_used_uris.txt")
-    hashmap_file = os.path.join(FLAGS.lama_folder, "abstracts", "hashmap_used.json")
+    hashmap_file = os.path.join(
+        FLAGS.lama_folder, "abstracts", "hashmap_used.json"
+    )
     test_file = os.path.join(FLAGS.lama_folder, "all.tfrecord")
-    abstract_file = os.path.join(FLAGS.lama_folder, "abstracts", "all_used.jsonl")
+    abstract_file = os.path.join(
+        FLAGS.lama_folder, "abstracts", "all_used.jsonl"
+    )
     checkpoint_folders = FLAGS.checkpoint_folders.split(",")
 
     gpus = list(map(int, FLAGS.gpus_to_use.split(",")))
@@ -88,29 +105,28 @@ def main(_):
     print(f"gpus: {gpus}")
 
     evaluate_cmd = (
-        f"export PYTHONHASHSEED=0;"
-        f"python -u eval/evaluate.py "
+        "export PYTHONHASHSEED=0;"
+        "python -u eval/evaluate.py "
         f"--abstract_uri_list {uri_file} "
         f"--abstract_file {abstract_file} "
         f"--test_data {test_file} "
         f"--hashmap_file {hashmap_file} "
         f"--nn_list_file {FLAGS.baseline_nn_file} "
-        f"--disable_tqdm "
+        "--disable_tqdm "
         f"--output_file {FLAGS.baseline_metrics_file};"
-        f"deactivate"
+        "deactivate"
     )
 
     logging.info(
-        f"Running baseline evaluations..."
+        "Running baseline evaluations..."
         f"Metrics will be outputted to {FLAGS.baseline_metrics_file}"
     )
 
-    # subprocess.run(evaluate_cmd, shell=True, check=True)
+    subprocess.run(evaluate_cmd, shell=True, check=True)
 
     header_cmd = (
-        'eval "$(conda shell.bash hook)";'
-        "conda activate transformers;"
-        "export PYTHONHASHSEED=0;"
+        'eval "$(conda shell.bash hook)";conda activate transformers;export'
+        " PYTHONHASHSEED=0;"
     )
 
     for i in range(3):
@@ -130,8 +146,8 @@ def main(_):
                 f"--seed={i} "
                 f"--checkpoint_folders={FLAGS.checkpoint_folders} "
                 f"--output_metrics_prefix={baseline_eval_file} "
-                f"--gpu=0 "
-                f"--disable_tqdm "
+                "--gpu=0 "
+                "--disable_tqdm "
             )
 
             if subset == "corrects":
@@ -144,7 +160,9 @@ def main(_):
             baseline_log_prefix = os.path.join(baseline_prefix, "logs/")
             os.makedirs(baseline_log_prefix, exist_ok=True)
 
-            logging.info(f"Experiment files {baseline_log_prefix}\n" f"Params:\n{pre_params}")
+            logging.info(
+                f"Experiment files {baseline_log_prefix}\nParams:\n{pre_params}"
+            )
 
             pre_cmd = (
                 f"python -u eval/reranker_pre.py {pre_params} > "
@@ -153,12 +171,14 @@ def main(_):
             )
 
             logging.info(f"RUN: {pre_cmd}")
-            # subprocess.run(gpu_header + header_cmd + pre_cmd, shell=True)
+            subprocess.run(gpu_header + header_cmd + pre_cmd, shell=True)
 
             for eos in ("no_eos",):
                 for accum in ("accum", "no_accum"):
 
-                    ckpt_prefix = os.path.join(baseline_prefix, f"{eos}_{accum}/")
+                    ckpt_prefix = os.path.join(
+                        baseline_prefix, f"{eos}_{accum}/"
+                    )
                     ckpt_log_prefix = os.path.join(ckpt_prefix, "logs/")
 
                     os.makedirs(ckpt_log_prefix, exist_ok=True)
@@ -186,8 +206,8 @@ def main(_):
                             f"--seed={i} "
                             f"--checkpoint_folder={folder} "
                             f"--output_metrics_prefix={ckpt_scores_prefix} "
-                            f"--gpu=0 "
-                            f"--disable_tqdm "
+                            "--gpu=0 "
+                            "--disable_tqdm "
                         )
 
                         if eos == "eos":
@@ -201,13 +221,15 @@ def main(_):
                             ckpt_params += "--calculate_gradient_scores"
 
                         ckpt_cmd = (
-                            f"python -u eval/reranker_single_checkpoint.py {ckpt_params} >"
-                            f"{ckpt_log_prefix}/ckpt.{c}.log;"
+                            "python -u eval/reranker_single_checkpoint.py"
+                            f" {ckpt_params} >{ckpt_log_prefix}/ckpt.{c}.log;"
                         )
 
                         logging.info(f"RUN: {ckpt_cmd}")
 
-                        # subprocess.Popen(gpu_header + header_cmd + ckpt_cmd, shell=True)
+                        subprocess.Popen(
+                            gpu_header + header_cmd + ckpt_cmd, shell=True
+                        )
                         time.sleep(10)
 
                     wait_for_files(files_to_check)
@@ -217,9 +239,9 @@ def main(_):
                         f"--metrics_file={baseline_eval_file}.pickle "
                         f"--seed={i} "
                         f"--scores_folder={ckpt_scores_prefix} "
-                        f"--exp_type=layers "
+                        "--exp_type=layers "
                         f"--output_metrics_file={ckpt_prefix}/results "
-                        f"--disable_tqdm "
+                        "--disable_tqdm "
                     )
 
                     post_cmd = (
