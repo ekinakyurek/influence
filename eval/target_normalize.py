@@ -38,7 +38,6 @@ flags.DEFINE_integer('feature_size', default=4*2048,
 flags.DEFINE_bool('normalize', default=False,
                   help="normalize embeddings")
 
-
 flags.DEFINE_integer('gpu_workers', default=1,
                      help='number of gpus to distribute')
 

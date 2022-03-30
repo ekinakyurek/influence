@@ -9,7 +9,8 @@ import numpy as np
 from tqdm import tqdm
 from transformers import MT5ForConditionalGeneration, T5Tokenizer
 import random
-from src.metric_utils import K_EVALS, precision_recallv2, reciprocal_rankv2
+from src.lama_utils import abs_to_str, get_sentence
+from src.metric_utils import K_EVALS, average_metrics, precision_recallv2, reciprocal_rankv2
 import copy
 
 
@@ -47,6 +48,9 @@ flags.DEFINE_string('samples_from_exp', default=None,
 flags.DEFINE_integer('gpu', default=0,
                      help="gpu to use")
 
+flags.DEFINE_boolean('disable_tqdm', False,
+                     help='Disable tqdm')
+
 
 def check_equal(a1: Mapping,
                 a2: Mapping,
@@ -77,13 +81,6 @@ def tokenize(tokenizer: T5Tokenizer, record: Mapping):
     return {'inputs': inputs, 'targets': targets[:, :-1]}
 
 
-def get_sentence(abstract):
-    targets = abstract['targets_pretokenized'].replace('<extra_id_0> ', '')\
-                                              .strip()
-    sentence = abstract['inputs_pretokenized'].replace('<extra_id_0>', targets)
-    return sentence
-
-
 def collapse_abstracts_and_scores(scores: Sequence[float],
                                   abstracts: Sequence[Mapping]):
     uri_to_indices = {}
@@ -108,9 +105,7 @@ def evaluate(example, abstracts, fact_abstracts, collapse=False):
     """Evaluate nearast abstracts to get the metrics"""
 
     if collapse:
-        identifier = get_sentence
-
-        _, idxs = np.unique(list(map(identifier, fact_abstracts)),
+        _, idxs = np.unique(list(map(get_sentence, fact_abstracts)),
                             return_index=True)
 
         fact_abstracts = [fact_abstracts[id] for id in idxs]
@@ -133,21 +128,6 @@ def evaluate(example, abstracts, fact_abstracts, collapse=False):
     return precision, recall, rr
 
 
-def average_metrics(results):
-    """Average the metrics over samples"""
-    metrics = {'precision': {}, 'recall': {}}
-    for k in K_EVALS:
-        metrics['precision'][k] = np.mean([res['precision'][k]
-                                           for res in results])
-
-        metrics['recall'][k] = np.mean([res['recall'][k]
-                                        for res in results])
-
-    metrics['mrr'] = np.mean([res['rr'] for res in results])
-    metrics['samples'] = results
-    return metrics
-
-
 def trim(output):
     """Trim the outputs for the accuracy evaluation."""
     output = output.replace('<extra_id_0>', '')
@@ -161,10 +141,6 @@ def trim(output):
     return output.lower()
 
 
-def identifier(x):
-    return x['inputs_pretokenized'] + x['targets_pretokenized']
-
-
 def run_random_baseline(samples):
     metrics = {}
     for index, sample in enumerate(samples):
@@ -173,7 +149,7 @@ def run_random_baseline(samples):
         abstracts = sample['nn_abstracts'] + sample['fact_abstracts'] + sample['distractors']
         rng = np.random.default_rng(0)
         rng.shuffle(abstracts)
-        _, indices = np.unique(list(map(identifier, abstracts)),
+        _, indices = np.unique(list(map(abs_to_str, abstracts)),
                                return_index=True)
         abstracts = [abstracts[ind] for ind in indices]
 
@@ -280,7 +256,7 @@ def rerun_baseline(samples):
 def get_model_accuracy(model, tokenizer: T5Tokenizer, samples, beam_size=3):
     """Get prediction labels for the given samples"""
     labels = []
-    for k, sample in enumerate(tqdm(samples)):
+    for k, sample in enumerate(tqdm(samples, disable=FLAGS.disable_tqdm)):
         raw_input = sample["example"]['inputs_pretokenized']
         data = tokenize(tokenizer, sample['example'])
         inputs = data['inputs']

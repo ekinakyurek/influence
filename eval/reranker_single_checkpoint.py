@@ -46,6 +46,9 @@ flags.DEFINE_bool('calculate_gradient_scores', default=False,
 flags.DEFINE_bool('use_entity_locations', default=False,
                   help="use only entity locations when calculating activation embeddings")
 
+flags.DEFINE_boolean('disable_tqdm', False,
+                     help='Disable tqdm')
+
 
 def _find_entity_locations(input, target, surface, name):
     output = [None, None]
@@ -303,7 +306,7 @@ def identifier(x):
 def run_all_query_scores(model, score_fn, tokenizer: T5Tokenizer, samples):
     """Runs reranking experiments for all configurations listed below and returns the results"""
     query_scores = []
-    for (index, sample) in tqdm(enumerate(samples)):
+    for (index, sample) in enumerate(tqdm(samples, disable=FLAGS.disable_tqdm)):
         query = sample['example']
 
         abstracts = sample['nn_abstracts'] + sample['fact_abstracts'] + sample['distractors']

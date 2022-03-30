@@ -39,6 +39,9 @@ flags.DEFINE_bool('target_only', default=False,
 flags.DEFINE_bool('only_masked_sentence', default=False,
                   help='convert abstracts to single sentence by extracting only the masked sentence')
 
+flags.DEFINE_boolean('disable_tqdm', False,
+                     help='Disable tqdm')
+
 
 def extract_masked_sentence(abstract: str, term='<extra_id_0>'):
     term_start = abstract.find(term)
@@ -104,7 +107,7 @@ def main(_):
     random.seed(10)
     indices = np.random.permutation(len(examples))
     counted = 0
-    for p, index in enumerate(tqdm(indices)):
+    for p, index in enumerate(tqdm(indices, disable=FLAGS.disable_tqdm)):
         nn = nns[index]
         example = examples[index]
         nn_ids = uri_list[nn['neighbor_ids']]
