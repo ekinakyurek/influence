@@ -18,7 +18,5 @@ python reranker.py \
     --baseline_nn_file ${nn_output_file} \
     --data_root ${data_root} \
     --lama_folder LAMA/data/TREx_lama_templates_v3 \
-    --gpus_to_use 10,13,14,15 \
+    --gpus_to_use 2,3,14,15\
     --exp_folder ${exp_folder} > ${exp_folder}/.log.txt 2> ${exp_folder}/.err.txt
-
-

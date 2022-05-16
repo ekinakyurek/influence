@@ -4,7 +4,8 @@ import os
 import pickle
 import random
 from dataclasses import dataclass, field
-from typing import Mapping, Optional, Sequence
+from functools import partial
+from typing import Callable, List, Mapping, Optional, Sequence
 import numpy as np
 from absl import app, flags, logging
 from tqdm import tqdm
@@ -12,6 +13,7 @@ from src.lama_utils import abs_to_str, get_sentence
 from src.metric_utils import (
     K_EVALS,
     average_metrics,
+    check_correct,
     precision_recallv2,
     reciprocal_rankv2,
 )
@@ -194,7 +196,13 @@ def get_all_layer_configs(num_layers=12, exp_type="layers"):
     return layer_configs
 
 
-def evaluate(example, abstracts, fact_abstracts, collapse=False):
+def evaluate(
+    example,
+    abstracts,
+    fact_abstracts,
+    compare_fn: Callable,
+    collapse=False,
+):
     """Evaluate nearast abstracts to get the metrics"""
     if collapse:
         _, idxs = np.unique(
@@ -202,16 +210,22 @@ def evaluate(example, abstracts, fact_abstracts, collapse=False):
         )
         fact_abstracts = [fact_abstracts[id] for id in idxs]
 
+    check_fn = partial(check_correct, compare_fn=compare_fn)
+
     if len(fact_abstracts) == 0:
         logging.warning(f"empty fact abstract for query: {example}")
         return None, None, None
 
-    # nn_ids = [a['page_uri'] for a in abstracts]
     precision, recall = precision_recallv2(
-        abstracts, fact_abstracts, check_correct, ks=K_EVALS, collapse=collapse
+        abstracts,
+        fact_abstracts,
+        check_fn,
+        ks=K_EVALS,
     )
     rr = reciprocal_rankv2(
-        abstracts, fact_abstracts, check_correct, collapse=collapse
+        abstracts,
+        fact_abstracts,
+        check_fn,
     )
 
     return precision, recall, rr
@@ -229,7 +243,25 @@ def rerank_with_scores(
     alpha: float = 0.0,
 ):
     """Given layers prefixes we sum scores of these layers
-    and rerank the abstracts"""
+       and rerank the abstracts
+
+    Args:
+        abstracts (Sequence[Mapping]): _description_
+        layer_scores (Mapping): _description_
+        layers (Optional[LayerConfig], optional): _description_. Defaults to None.
+        collapse (bool, optional): _description_. Defaults to False.
+        normalize (bool, optional): _description_. Defaults to False.
+        norm_type (str, optional): _description_. Defaults to "global".
+        baseline_scores (np.array, optional): _description_. Defaults to None.
+        reweight_type (Optional[str], optional): _description_. Defaults to None.
+        alpha (float, optional): _description_. Defaults to 0.0.
+
+    Raises:
+        ValueError: _description_
+
+    Returns:
+        _type_: _description_
+    """
 
     if layers is not None:
         # Assuming our layer configurations provide prefix codes
@@ -361,32 +393,30 @@ def collapse_abstracts_and_scores(
     return np.array(uri_scores), [abstracts[j] for j in uri_indices]
 
 
-def check_equal(a1: Mapping, a2: Mapping, collapse: bool):
-    if collapse:
-        return get_sentence(a1) == get_sentence(a2)
-    else:
-        return a1["sentence_uris"] == a2["sentence_uris"]
-
-
-def check_correct(
-    a1: Mapping, fact_abstracts: Sequence[Mapping], collapse: bool
-):
-    return any((check_equal(a1, a, collapse) for a in fact_abstracts))
-
-
 def run_all_layer_configs(
-    samples,
-    scores,
-    num_layers=12,
-    reweight_type=None,
-    alpha=0.0,
-    exp_type="layers",
-    norm_type="global",
-):
-
+    samples: List,
+    scores: List,
+    num_layers: int = 12,
+    reweight_type: Optional[str] = None,
+    alpha: float = 0.0,
+    exp_type: str = "layers",
+    norm_type: str = "global",
+) -> Mapping:
     """Runs reranking experiments for all configurations
-    listed below and returns the results"""
+       listed below and returns the results
 
+    Args:
+        samples (List): List of samples
+        scores (List): List of scores
+        num_layers (int, optional): _description_. Defaults to 12.
+        reweight_type (str, optional): _description_. Defaults to None.
+        alpha (float, optional): _description_. Defaults to 0.0.
+        exp_type (str, optional): _description_. Defaults to "layers".
+        norm_type (str, optional): _description_. Defaults to "global".
+
+    Returns:
+        Mapping: _description_
+    """
     assert len(scores) == len(samples), f"{len(scores)} vs {len(samples)}"
 
     logging.info(f"Processing {len(scores)} samples")
@@ -429,7 +459,29 @@ def run_all_layer_configs(
             if norm_type == "global" and k == "dot":
                 continue
 
-            for method in ("collapse", "full"):  # eval methods
+            for method in (
+                "collapse",
+                "full",
+            ):  # eval methods
+
+                if method == "collapse":
+
+                    def compare_fn(a, b):
+                        return get_sentence(a) == get_sentence(b)
+
+                else:
+
+                    def compare_fn(a, b):
+                        return a["sentence_uris"] == b["sentence_uris"]
+
+                    def compare_fn_relation(a, b):
+                        return query["predicate_id"] in a["facts"]
+
+                    def compare_fn_object(a, b):
+                        return query["obj_uri"] in a["facts"]
+
+                    def compare_fn_subject(a, b):
+                        return query["sub_uri"] in a["facts"]
 
                 if method not in result:
                     result[method] = {}
@@ -464,20 +516,48 @@ def run_all_layer_configs(
                         abstracts_config,
                         sample["fact_abstracts"],
                         collapse=is_collapse,
+                        compare_fn=compare_fn,
                     )
 
                     if precision is not None:
-                        result[method][config_name].append(
-                            {
-                                "index": index,
-                                "precision": precision,
-                                "recall": recall,
-                                "rr": rr,
-                                "nn_abstracts": abstracts_config[:100],
-                                "nn_scores": scores_config[:100].tolist(),
-                                "weights": config.layer_weights,
-                            }
-                        )
+                        current_metrics = {
+                            "index": index,
+                            "precision": precision,
+                            "recall": recall,
+                            "rr": rr,
+                            "nn_abstracts": abstracts_config[:100],
+                            "nn_scores": scores_config[:100].tolist(),
+                            "weights": config.layer_weights,
+                        }
+
+                        if not is_collapse:
+                            for compare_fn_sub in (
+                                compare_fn_relation,
+                                compare_fn_object,
+                                compare_fn_subject,
+                            ):
+                                precision_sub, recall_sub, rr_sub = evaluate(
+                                    query,
+                                    abstracts_config,
+                                    sample["fact_abstracts"],
+                                    collapse=is_collapse,
+                                    compare_fn=compare_fn_sub,
+                                )
+
+                                current_metrics[
+                                    "precision_" + compare_fn_sub.__name__
+                                ] = precision_sub
+
+                                current_metrics[
+                                    "recall_" + compare_fn_sub.__name__
+                                ] = recall_sub
+
+                                current_metrics[
+                                    "rr_" + compare_fn_sub.__name__
+                                ] = rr_sub
+
+                        result[method][config_name].append(current_metrics)
+
                     else:
                         logging.warning(f"metrics are none in method: {method}")
 

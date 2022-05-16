@@ -3,7 +3,8 @@ import gzip
 import json
 import pickle
 import random
-from typing import Mapping, Sequence
+from functools import partial
+from typing import Callable, Mapping, Sequence
 import numpy as np
 from absl import app, flags, logging
 from tqdm import tqdm
@@ -12,6 +13,7 @@ from src.lama_utils import abs_to_str, get_sentence
 from src.metric_utils import (
     K_EVALS,
     average_metrics,
+    check_correct,
     precision_recallv2,
     reciprocal_rankv2,
 )
@@ -72,19 +74,6 @@ flags.DEFINE_integer("gpu", default=0, help="gpu to use")
 flags.DEFINE_boolean("disable_tqdm", False, help="Disable tqdm")
 
 
-def check_equal(a1: Mapping, a2: Mapping, collapse: bool):
-    if collapse:
-        return get_sentence(a1) == get_sentence(a2)
-    else:
-        return a1["sentence_uris"] == a2["sentence_uris"]
-
-
-def check_correct(
-    a1: Mapping, fact_abstracts: Sequence[Mapping], collapse: bool
-):
-    return any((check_equal(a1, a, collapse) for a in fact_abstracts))
-
-
 def tokenize(tokenizer: T5Tokenizer, record: Mapping):
     """Tokenize the inputs and targets of a record"""
     inputs = tokenizer(
@@ -122,7 +111,9 @@ def collapse_abstracts_and_scores(
     return np.array(uri_scores), [abstracts[j] for j in uri_indices]
 
 
-def evaluate(example, abstracts, fact_abstracts, collapse=False):
+def evaluate(
+    example, abstracts, fact_abstracts, compare_fn: Callable, collapse=False
+):
     """Evaluate nearast abstracts to get the metrics"""
 
     if collapse:
@@ -132,18 +123,21 @@ def evaluate(example, abstracts, fact_abstracts, collapse=False):
 
         fact_abstracts = [fact_abstracts[id] for id in idxs]
 
+    check_fn = partial(check_correct, compare_fn=compare_fn)
+
     if len(fact_abstracts) == 0:
         logging.warning(f"empty fact abstract for query: {example}")
         return None, None, None
 
     # nn_ids = [a['page_uri'] for a in abstracts]
     precision, recall = precision_recallv2(
-        abstracts, fact_abstracts, check_correct, ks=K_EVALS, collapse=collapse
+        abstracts,
+        fact_abstracts,
+        check_fn,
+        ks=K_EVALS,
     )
 
-    rr = reciprocal_rankv2(
-        abstracts, fact_abstracts, check_correct, collapse=collapse
-    )
+    rr = reciprocal_rankv2(abstracts, fact_abstracts, check_fn)
     return precision, recall, rr
 
 
@@ -194,6 +188,25 @@ def run_random_baseline(samples):
 
             collapse = method == "collapse"
 
+            if method == "collapse":
+
+                def compare_fn(a, b):
+                    return get_sentence(a) == get_sentence(b)
+
+            else:
+
+                def compare_fn(a, b):
+                    return a["sentence_uris"] == b["sentence_uris"]
+
+                def compare_fn_relation(a, b):
+                    return query["predicate_id"] in a["facts"]
+
+                def compare_fn_object(a, b):
+                    return query["obj_uri"] in a["facts"]
+
+                def compare_fn_subject(a, b):
+                    return query["sub_uri"] in a["facts"]
+
             if method not in metrics:
                 metrics[method] = []
 
@@ -213,20 +226,49 @@ def run_random_baseline(samples):
                 )
 
             precision, recall, rr = evaluate(
-                query, current_abstracts, fact_abstracts, collapse=collapse
+                query,
+                current_abstracts,
+                fact_abstracts,
+                collapse=collapse,
+                compare_fn=compare_fn,
             )
 
             if precision is not None:
-                results.append(
-                    {
-                        "index": index,
-                        "precision": precision,
-                        "recall": recall,
-                        "rr": rr,
-                        "nn_abstracts": abstracts_reranked[:100],
-                        "nn_scores": scores_reranked[:100],
-                    }
-                )
+                current_metrics = {
+                    "index": index,
+                    "precision": precision,
+                    "recall": recall,
+                    "rr": rr,
+                    "nn_abstracts": abstracts_reranked[:100],
+                    "nn_scores": scores_reranked[:100],
+                }
+                if not collapse:
+                    for compare_fn_sub in (
+                        compare_fn_relation,
+                        compare_fn_object,
+                        compare_fn_subject,
+                    ):
+                        precision_sub, recall_sub, rr_sub = evaluate(
+                            query,
+                            current_abstracts,
+                            fact_abstracts,
+                            collapse=collapse,
+                            compare_fn=compare_fn_sub,
+                        )
+
+                        current_metrics[
+                            "precision_" + compare_fn_sub.__name__
+                        ] = precision_sub
+
+                        current_metrics[
+                            "recall_" + compare_fn_sub.__name__
+                        ] = recall_sub
+
+                        current_metrics[
+                            "rr_" + compare_fn_sub.__name__
+                        ] = rr_sub
+
+                results.append(current_metrics)
 
     for method in metrics.keys():
         metrics[method] = average_metrics(metrics[method])
@@ -243,6 +285,27 @@ def rerun_baseline(samples):
         collapse = method == "collapse"
 
         for sample_index, sample in enumerate(copy.deepcopy(samples)):
+            query = sample["example"]
+
+            if method == "collapse":
+
+                def compare_fn(a, b):
+                    return get_sentence(a) == get_sentence(b)
+
+            else:
+
+                def compare_fn(a, b):
+                    return a["sentence_uris"] == b["sentence_uris"]
+
+                def compare_fn_relation(a, b):
+                    return query["predicate_id"] in a["facts"]
+
+                def compare_fn_object(a, b):
+                    return query["obj_uri"] in a["facts"]
+
+                def compare_fn_subject(a, b):
+                    return query["sub_uri"] in a["facts"]
+
             scores, abstracts = (sample["nn"]["scores"], sample["nn_abstracts"])
 
             if collapse:
@@ -251,10 +314,11 @@ def rerun_baseline(samples):
                 )
 
             precision, recall, rr = evaluate(
-                sample["example"],
+                query,
                 abstracts,
                 sample["fact_abstracts"],
                 collapse=collapse,
+                compare_fn=compare_fn,
             )
 
             if precision is None:
@@ -284,6 +348,28 @@ def rerun_baseline(samples):
                 "nn_abstracts": samples[sample_index]["nn_abstracts"][:100],
                 "nn_scores": samples[sample_index]["nn"]["scores"][:100],
             }
+
+            if not collapse:
+                for compare_fn_sub in (
+                    compare_fn_relation,
+                    compare_fn_object,
+                    compare_fn_subject,
+                ):
+                    precision_sub, recall_sub, rr_sub = evaluate(
+                        query,
+                        abstracts,
+                        sample["fact_abstracts"],
+                        collapse=collapse,
+                        compare_fn=compare_fn_sub,
+                    )
+
+                    result[
+                        "precision_" + compare_fn_sub.__name__
+                    ] = precision_sub
+
+                    result["recall_" + compare_fn_sub.__name__] = recall_sub
+
+                    result["rr_" + compare_fn_sub.__name__] = rr_sub
 
             metrics[method].append(result)
 

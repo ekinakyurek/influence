@@ -136,7 +136,7 @@ def main(_):
 
             baseline_prefix = os.path.join(output_metric_folder, f"{subset}/")
             os.makedirs(baseline_prefix, exist_ok=True)
-            baseline_eval_file = os.path.join(baseline_prefix, "eval")
+            baseline_eval_file = os.path.join(baseline_prefix, "eval_detailed")
 
             gpu = assign_to_gpu(gpus, f"{baseline_eval_file}.pickle")
             gpu_header = f"export CUDA_VISIBLE_DEVICES={gpu};"
@@ -240,7 +240,7 @@ def main(_):
                         f"--seed={i} "
                         f"--scores_folder={ckpt_scores_prefix} "
                         "--exp_type=layers "
-                        f"--output_metrics_file={ckpt_prefix}/results "
+                        f"--output_metrics_file={ckpt_prefix}/results_detailed "
                         "--disable_tqdm "
                     )
 
