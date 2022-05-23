@@ -70,6 +70,14 @@ flags.DEFINE_string(
     help="name for exp folder to load the splits from",
 )
 
+flags.DEFINE_string("eval_stage", default="True", help="eval stage")
+
+flags.DEFINE_string("pre_stage", default="True", help="pre stage")
+
+flags.DEFINE_string("ckpt_stage", default="True", help="ckpt stage")
+
+flags.DEFINE_string("post_stage", default="True", help="post stage")
+
 flags.DEFINE_string("gpus_to_use", default=None, help="coma seperated gpu ids")
 
 
@@ -109,24 +117,24 @@ def main(_):
     gpus = {id: [] for id in gpus}
     print(f"gpus: {gpus}")
 
-    # evaluate_cmd = (
-    #     "export PYTHONHASHSEED=0;"
-    #     "python -u eval/evaluate.py "
-    #     f"--fact_to_ids_file {FLAGS.fact_to_ids_file} "
-    #     f"--nn_list_file {FLAGS.baseline_nn_file} "
-    #     "--disable_tqdm "
-    #     f"--output_file {FLAGS.baseline_metrics_file};"
-    #     "deactivate"
-    # )
+    if FLAGS.eval_stage and FLAGS.load_exp_folder is None:
 
-    if FLAGS.load_exp_folder is None:
-        pass
-        # logging.info(
-        #     "Running baseline evaluations..."
-        #     f"Metrics will be outputted to {FLAGS.baseline_metrics_file}"
-        # )
+        evaluate_cmd = (
+            "export PYTHONHASHSEED=0;"
+            "python -u eval/evaluate.py "
+            f"--fact_to_ids_file {FLAGS.fact_to_ids_file} "
+            f"--nn_list_file {FLAGS.baseline_nn_file} "
+            "--disable_tqdm "
+            f"--output_file {FLAGS.baseline_metrics_file};"
+            "deactivate"
+        )
 
-        # subprocess.run(evaluate_cmd, shell=True, check=True)
+        logging.info(
+            "Running baseline evaluations..."
+            f"Metrics will be outputted to {FLAGS.baseline_metrics_file}"
+        )
+
+        subprocess.run(evaluate_cmd, shell=True, check=True)
 
     header_cmd = (
         'eval "$(conda shell.bash hook)";conda activate transformers;export'
@@ -134,6 +142,7 @@ def main(_):
     )
 
     for i in range(3):
+
         if FLAGS.load_exp_folder is None:
             exp_folder = FLAGS.exp_folder
         else:
@@ -141,13 +150,13 @@ def main(_):
 
         output_metric_folder = os.path.join(exp_folder, f"seed_{i}")
 
-        for subset in ("random",):
+        for subset in ("learned", "random"):
             os.makedirs(output_metric_folder, exist_ok=True)
             baseline_prefix = os.path.join(output_metric_folder, f"{subset}/")
             os.makedirs(baseline_prefix, exist_ok=True)
             baseline_eval_file = os.path.join(baseline_prefix, "eval_detailed")
 
-            if FLAGS.load_exp_folder is None:
+            if FLAGS.pre_stage and FLAGS.load_exp_folder is None:
                 gpu = assign_to_gpu(gpus, f"{baseline_eval_file}.pickle")
                 gpu_header = f"export CUDA_VISIBLE_DEVICES={gpu};"
 
@@ -172,22 +181,22 @@ def main(_):
                 baseline_log_prefix = os.path.join(baseline_prefix, "logs/")
                 os.makedirs(baseline_log_prefix, exist_ok=True)
 
-                # logging.info(
-                #     "Experiment files"
-                #     f" {baseline_log_prefix}\nParams:\n{pre_params}"
-                # )
+                logging.info(
+                    "Experiment files"
+                    f" {baseline_log_prefix}\nParams:\n{pre_params}"
+                )
 
-                # pre_cmd = (
-                #     f"python -u eval/reranker_pre.py {pre_params} > "
-                #     f"{baseline_log_prefix}/pre.log 2>"
-                #     f"{baseline_log_prefix}/pre.err;"
-                # )
+                pre_cmd = (
+                    f"python -u eval/reranker_pre.py {pre_params} > "
+                    f"{baseline_log_prefix}/pre.log 2>"
+                    f"{baseline_log_prefix}/pre.err;"
+                )
 
-                # logging.info(f"RUN: {pre_cmd}")
-                # subprocess.run(gpu_header + header_cmd + pre_cmd, shell=True)
+                logging.info(f"RUN: {pre_cmd}")
+                subprocess.run(gpu_header + header_cmd + pre_cmd, shell=True)
 
-            for eos in ("no_eos",):
-                for accum in ("no_accum",):
+            for eos in ("no_eos", "eos"):
+                for accum in ("accum", "no_accum"):
 
                     if FLAGS.load_exp_folder is None:
                         ckpt_prefix = os.path.join(
@@ -206,84 +215,81 @@ def main(_):
                     os.makedirs(ckpt_log_prefix, exist_ok=True)
                     ckpt_scores_prefix = os.path.join(ckpt_prefix, "scores/")
 
-                    # ckpt_scores_prefix = os.path.join(
-                    #     baseline_prefix,
-                    #     f"{eos}_{accum}/",
-                    #     "scores/pytorch_model_10200",
-                    # )
-
                     os.makedirs(ckpt_scores_prefix, exist_ok=True)
 
                     files_to_check = []
 
-                    for c, folder in enumerate(checkpoint_folders):
+                    if FLAGS.ckpt_stage:
 
-                        checkpoint_name = pathlib.PurePath(folder).name
+                        for c, folder in enumerate(checkpoint_folders):
 
-                        output_ckpt_file = os.path.join(
-                            ckpt_scores_prefix, f"{checkpoint_name}.pickle"
+                            checkpoint_name = pathlib.PurePath(folder).name
+
+                            output_ckpt_file = os.path.join(
+                                ckpt_scores_prefix, f"{checkpoint_name}.pickle"
+                            )
+
+                            check_file = output_ckpt_file.replace(
+                                "pickle", "done"
+                            )
+
+                            files_to_check.append(check_file)
+
+                            gpu = assign_to_gpu(gpus, check_file)
+
+                            gpu_header = f"export CUDA_VISIBLE_DEVICES={gpu};"
+
+                            ckpt_params = (
+                                f"--metrics_file={baseline_eval_file}.pickle "
+                                f"--seed={i} "
+                                f"--checkpoint_folder={folder} "
+                                f"--output_metrics_prefix={ckpt_scores_prefix} "
+                                "--gpu=0 "
+                                "--disable_tqdm "
+                            )
+
+                            if eos == "eos":
+                                ckpt_params += "--include_eos "
+                            if accum == "accum":
+                                ckpt_params += "--load_accums "
+
+                            if c == len(checkpoint_folders) - 1:
+                                ckpt_params += "--calculate_activation_scores"
+                            else:
+                                ckpt_params += "--calculate_gradient_scores"
+
+                            ckpt_cmd = (
+                                "python -u eval/reranker_single_checkpoint.py"
+                                f" {ckpt_params} >{ckpt_log_prefix}/ckpt.{c}.log"
+                                f" 2>{ckpt_log_prefix}/ckpt.{c}.err; "
+                            )
+
+                            logging.info(f"RUN: {ckpt_cmd}")
+
+                            subprocess.Popen(
+                                gpu_header + header_cmd + ckpt_cmd, shell=True
+                            )
+                            time.sleep(10)
+
+                    if FLAGS.post_stage:
+                        wait_for_files(files_to_check)
+
+                        post_params = (
+                            f"--metrics_file={baseline_eval_file}.pickle"
+                            f" --seed={i} --scores_folder={ckpt_scores_prefix} --exp_type=layers"
+                            f" --output_metrics_file={ckpt_prefix}/results_detailed"
+                            " --disable_tqdm "
                         )
 
-                        check_file = output_ckpt_file.replace("pickle", "done")
-
-                        files_to_check.append(check_file)
-
-                        gpu = assign_to_gpu(gpus, check_file)
-
-                        gpu_header = f"export CUDA_VISIBLE_DEVICES={gpu};"
-
-                        ckpt_params = (
-                            f"--metrics_file={baseline_eval_file}.pickle "
-                            f"--seed={i} "
-                            f"--checkpoint_folder={folder} "
-                            f"--output_metrics_prefix={ckpt_scores_prefix} "
-                            "--gpu=0 "
-                            "--disable_tqdm "
+                        post_cmd = (
+                            f"python -u eval/reranker_post.py {post_params} >"
+                            f"{ckpt_log_prefix}/post.log 2> "
+                            f"{ckpt_log_prefix}/post.err;"
                         )
 
-                        if eos == "eos":
-                            ckpt_params += "--include_eos "
-                        if accum == "accum":
-                            ckpt_params += "--load_accums "
+                        logging.info(f"RUN: {post_cmd}")
 
-                        if c == len(checkpoint_folders) - 1:
-                            ckpt_params += "--calculate_activation_scores"
-                        else:
-                            ckpt_params += "--calculate_gradient_scores"
-
-                        ckpt_cmd = (
-                            "python -u eval/reranker_single_checkpoint.py"
-                            f" {ckpt_params} >{ckpt_log_prefix}/ckpt.{c}.log"
-                            f" 2>{ckpt_log_prefix}/ckpt.{c}.err; "
-                        )
-
-                        logging.info(f"RUN: {ckpt_cmd}")
-
-                        subprocess.Popen(
-                            gpu_header + header_cmd + ckpt_cmd, shell=True
-                        )
-                        time.sleep(10)
-
-                    wait_for_files(files_to_check)
-
-                    post_params = (
-                        f"--metrics_file={baseline_eval_file}.pickle "
-                        f"--seed={i} "
-                        f"--scores_folder={ckpt_scores_prefix} "
-                        "--exp_type=layers "
-                        f"--output_metrics_file={ckpt_prefix}/results_detailed "
-                        "--disable_tqdm "
-                    )
-
-                    post_cmd = (
-                        f"python -u eval/reranker_post.py {post_params} >"
-                        f"{ckpt_log_prefix}/post.log 2> "
-                        f"{ckpt_log_prefix}/post.err;"
-                    )
-
-                    logging.info(f"RUN: {post_cmd}")
-
-                    subprocess.Popen(header_cmd + post_cmd, shell=True)
+                        subprocess.Popen(header_cmd + post_cmd, shell=True)
 
 
 if __name__ == "__main__":

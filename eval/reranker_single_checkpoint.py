@@ -420,6 +420,9 @@ def main(_, score_fn=get_all_scores):
     with gzip.open(output, "wb") as f:
         pickle.dump(scores, f, protocol=pickle.HIGHEST_PROTOCOL)
 
+    with open(output.replace("pickle", "done"), "w") as f:
+        print("done", file=f)
+
 
 if __name__ == "__main__":
     app.run(main)

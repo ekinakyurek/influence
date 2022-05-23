@@ -24,5 +24,8 @@ do
         --baseline_reweight ${weight} \
         --gpus_to_use 0,1,2,3 \
         --load_exp_folder ${exp_folder} \
+        --noeval_stage \
+        --nopre_stage \
+        --nockpt_stage \
         --exp_folder ${weight_exp_folder} > ${weight_exp_folder}/.log2.txt 2> ${weight_exp_folder}/.err2.txt
 done

@@ -641,9 +641,6 @@ def main(_):
     with gzip.open(FLAGS.output_metrics_file + ".pickle", "wb") as f:
         pickle.dump(metrics, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-    with gzip.open(FLAGS.output_metrics_file + ".done", "wb") as f:
-        print("done", file=f)
-
 
 if __name__ == "__main__":
     app.run(main)
