@@ -1,6 +1,13 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
-exclude: ".git"
+exclude: >
+  (?x)(
+      LICENSE$|
+      .txt$|
+      .md$|
+      .git
+  )
+
 default_stages:
   - commit
 fail_fast: true

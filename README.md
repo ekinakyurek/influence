@@ -1,5 +1,7 @@
 # Tracing Knowledge in Language Models Back to the Training Data
 
+Paper: [Tracing Knowledge in Language Models Back to the Training Data](https://arxiv.org/abs/2201.12926)   
+Ekin Akyürek, Tolga Bolukbasi, Frederick Liu, Binbin Xiong, Ian Tenney, Jacob Andreas, Kelvin Guu (2022)
 
 ## Setup local environment
 ```SHELL
@@ -9,6 +11,9 @@ pip install --upgrade pip
 pip install -r requirements.txt # pip install -r requirements_gpu.txt
 pre-commit install
 ```
+
+## Data & Benchmark
+Please see the information about data in https://huggingface.co/datasets/ekinakyurek/ftrace
 
 ## Run scripts
 
