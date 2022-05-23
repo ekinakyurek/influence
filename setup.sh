@@ -1,2 +1,4 @@
-source $(pwd)/trex/bin/activate
-export PYTHONPATH=$(pwd)/LAMA:$PYTHONPATH
+#!/bin/bash
+
+source trex/bin/activate
+export PYTHONPATH=$(pwd)

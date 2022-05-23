@@ -1,0 +1,21 @@
+{
+    "python.linting.flake8Enabled": true,
+    "python.linting.enabled": true,
+    "editor.formatOnSave": true,
+    "python.analysis.extraPaths": [
+        "/raid/lingo/akyurek/gitother/fewshot_lama/LAMA",
+    ],
+    "python.formatting.provider": "black",
+    "python.formatting.blackArgs": [
+        "--line-length=80"
+    ],
+    "python.sortImports.args": [
+        "--profile",
+        "black"
+    ],
+    "[python]": {
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": true
+        }
+    }
+}
