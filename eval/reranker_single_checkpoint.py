@@ -333,14 +333,6 @@ def get_all_scores(model, tokenizer, query, abstracts):
     return all_scores
 
 
-def get_sentence(abstract):
-    targets = (
-        abstract["targets_pretokenized"].replace("<extra_id_0> ", "").strip()
-    )
-    sentence = abstract["inputs_pretokenized"].replace("<extra_id_0>", targets)
-    return sentence
-
-
 def identifier(x):
     return x["inputs_pretokenized"] + x["targets_pretokenized"]
 
