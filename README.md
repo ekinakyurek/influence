@@ -1,6 +1,6 @@
 # Tracing Knowledge in Language Models Back to the Training Data
 
-Paper: [Tracing Knowledge in Language Models Back to the Training Data](https://arxiv.org/abs/2201.12926)   
+Paper: [Tracing Knowledge in Language Models Back to the Training Data]()   
 Ekin Akyürek, Tolga Bolukbasi, Frederick Liu, Binbin Xiong, Ian Tenney, Jacob Andreas, Kelvin Guu (2022)
 
 ## Setup local environment
