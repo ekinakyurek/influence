@@ -4,12 +4,16 @@ import json
 import pickle
 import random
 from functools import partial
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Mapping
 import numpy as np
 from absl import app, flags, logging
 from tqdm import tqdm
 from transformers import MT5ForConditionalGeneration, T5Tokenizer
-from src.lama_utils import abs_to_str, get_sentence
+from src.lama_utils import (
+    abs_to_str,
+    collapse_abstracts_and_scores,
+    get_sentence,
+)
 from src.metric_utils import (
     K_EVALS,
     average_metrics,
@@ -88,27 +92,6 @@ def tokenize(tokenizer: T5Tokenizer, record: Mapping):
     ).input_ids
 
     return {"inputs": inputs, "targets": targets[:, :-1]}
-
-
-def collapse_abstracts_and_scores(
-    scores: Sequence[float], abstracts: Sequence[Mapping]
-):
-    uri_to_indices = {}
-    for i, a in enumerate(abstracts):
-        uri = get_sentence(a)
-        if uri in uri_to_indices:
-            uri_to_indices[uri].append(i)
-        else:
-            uri_to_indices[uri] = [i]
-    uri_scores = []
-    uri_indices = []
-    scores = np.array(scores)
-    for (uri, indices) in uri_to_indices.items():
-        i_max = np.argmax(scores[indices])
-        i_max = indices[i_max]
-        uri_indices.append(i_max)
-        uri_scores.append(scores[i_max])
-    return np.array(uri_scores), [abstracts[j] for j in uri_indices]
 
 
 def evaluate(
@@ -196,7 +179,7 @@ def run_random_baseline(samples):
             else:
 
                 def compare_fn(a, b):
-                    return a["sentence_uris"] == b["sentence_uris"]
+                    return a["id"] == b["id"]
 
                 def compare_fn_relation(a, b):
                     return query["predicate_id"] in a["facts"]
@@ -295,7 +278,7 @@ def rerun_baseline(samples):
             else:
 
                 def compare_fn(a, b):
-                    return a["sentence_uris"] == b["sentence_uris"]
+                    return a["id"] == b["id"]
 
                 def compare_fn_relation(a, b):
                     return query["predicate_id"] in a["facts"]

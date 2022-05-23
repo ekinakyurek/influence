@@ -1,13 +1,9 @@
 import json
+import datasets
 import numpy as np
-from absl import app, flags
+from absl import app, flags, logging
 from rank_bm25 import BM25Plus
 from tqdm import tqdm
-from src.tf_utils import (
-    get_tfexample_decoder_examples_io,
-    load_dataset_from_tfrecord,
-    tf,
-)
 
 
 FLAGS = flags.FLAGS
@@ -59,8 +55,8 @@ def extract_masked_sentence(abstract: str, term="<extra_id_0>"):
 
 
 def get_tokenized_query(record, extract=False):
-    answer = record[1].decode().replace("<extra_id_0> ", "")
-    text = record[0].decode()
+    answer = record["targets_pretokenized"].replace("<extra_id_0> ", "")
+    text = record["inputs_pretokenized"]
     if extract:
         text = extract_masked_sentence(text)
     text = text.replace("<extra_id_0>", answer).split(" ")
@@ -71,7 +67,10 @@ def get_target_equivalence_classes(abstracts):
     target_equivariance_indices = {}
     for (i, abstract) in enumerate(abstracts):
         target = (
-            abstract[1].decode().replace("<extra_id_0> ", "").strip().lower()
+            abstract["targets_pretokenized"]
+            .replace("<extra_id_0> ", "")
+            .strip()
+            .lower()
         )
         if target in target_equivariance_indices:
             target_equivariance_indices[target].append(i)
@@ -81,15 +80,22 @@ def get_target_equivalence_classes(abstracts):
 
 
 def get_target_ids(target_ids_hashmap, record):
-    target = record[1].decode().replace("<extra_id_0> ", "").strip().lower()
+    target = (
+        record["targets_pretokenized"]
+        .replace("<extra_id_0> ", "")
+        .strip()
+        .lower()
+    )
     return target_ids_hashmap.get(target, [0])
 
 
 def main(_):
-    abstract_dataset = tf.data.TFRecordDataset(FLAGS.abstract_file)
-    abstracts = load_dataset_from_tfrecord(abstract_dataset)
+    # abstract_dataset = tf.data.TFRecordDataset(FLAGS.abstract_file)
+    # abstracts = load_dataset_from_tfrecord(abstract_dataset)
 
-    print("abstracts loaded")
+    abstracts = datasets.load_dataset("data/ftrace", "abstracts", split="train")
+
+    logging.info(f"abstracts loaded {len(abstracts)}")
 
     if FLAGS.target_only:
         target_ids_hashmap = get_target_equivalence_classes(abstracts)
@@ -100,28 +106,31 @@ def main(_):
     ]
     bm25 = BM25Plus(corpus)
 
-    test_dataset = tf.data.TFRecordDataset(FLAGS.test_file)
-    test_loader = test_dataset.map(
-        get_tfexample_decoder_examples_io()
-    ).as_numpy_iterator()
+    test_dataset = datasets.load_dataset(
+        "data/ftrace", "queries", split="train", streaming=True
+    ).take(15000)
 
     with open(FLAGS.output_file, "w") as f:
-        for example in tqdm(test_loader):
+        for example in tqdm(test_dataset):
             query = get_tokenized_query(example)
             if FLAGS.target_only:
                 target_ids = np.array(
                     get_target_ids(target_ids_hashmap, example)
                 )
                 scores = np.array(bm25.get_batch_scores(query, target_ids))
-                idxs = np.argsort(-scores)[: FLAGS.topk]
-                scores = scores[idxs].tolist()
-                idxs = target_ids[idxs].tolist()
+                idxs = np.argpartition(scores, -FLAGS.topk)[-FLAGS.topk :]
+                nn_idxs = idxs[np.argsort(-scores[idxs])]
+                nn_scores = scores[nn_idxs].tolist()
+                nn_idxs = target_ids[nn_idxs].tolist()
             else:
                 scores = bm25.get_scores(query)
-                idxs = np.argsort(-scores)[: FLAGS.topk].tolist()
-                scores = [scores[i] for i in idxs]
+                idxs = np.argpartition(scores, -FLAGS.topk)[-FLAGS.topk :]
+                nn_idxs = idxs[np.argsort(-scores[idxs])]
+                nn_scores = scores[nn_idxs].tolist()
 
-            line = {"scores": scores, "neighbor_ids": idxs}
+            neighbor_ids = abstracts.select(nn_idxs)["id"]
+
+            line = {"scores": nn_scores, "neighbor_ids": neighbor_ids}
             print(json.dumps(line), file=f)
 
 

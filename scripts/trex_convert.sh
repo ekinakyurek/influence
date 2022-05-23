@@ -13,7 +13,4 @@ done
 
 python data/to_tf_record.py  --input_file ${input_folder}/all.jsonl
 mkdir -p ${input_folder}/abstracts/
-pythond data/extract_abstracts.py --input_folder ${input_folder} --abstract_file ${data_root}/original_trex/all.jsonl
-
-pcregrep  -o1 --buffer-size=999999 '"sentence_uris": "(.*?)"'  ${input_folder}/abstracts/all_used.jsonl > ${input_folder}/all_used_uris.txt
-pcregrep  -o1 --buffer-size=999999 '"sentence_uris": "(.*?)"'  ${input_folder}/abstracts/all.jsonl > ${input_folder}/all_uris.txt
+python data/extract_abstracts.py --input_folder ${input_folder} --abstract_file ${data_root}/original_trex/all.jsonl
