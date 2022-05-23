@@ -3,7 +3,7 @@
     "python.linting.enabled": true,
     "editor.formatOnSave": true,
     "python.analysis.extraPaths": [
-        "/raid/lingo/akyurek/gitother/fewshot_lama/LAMA",
+        "${workspaceFolder}",
     ],
     "python.formatting.provider": "black",
     "python.formatting.blackArgs": [
