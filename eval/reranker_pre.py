@@ -4,11 +4,11 @@ import json
 import pickle
 import random
 from functools import partial
-from typing import Callable, Mapping
+from typing import Any, Callable, Mapping, Optional
 import numpy as np
 from absl import app, flags, logging
 from tqdm import tqdm
-from transformers import MT5ForConditionalGeneration, T5Tokenizer
+from transformers import T5ForConditionalGeneration, T5Tokenizer
 from src.lama_utils import (
     abs_to_str,
     collapse_abstracts_and_scores,
@@ -179,16 +179,16 @@ def run_random_baseline(samples):
             else:
 
                 def compare_fn(a, b):
-                    return a["id"] == b["id"]
+                    return a["uuid"] == b["uuid"]
 
-                def compare_fn_relation(a, b):
-                    return query["predicate_id"] in a["facts"]
+                # def compare_fn_relation(a, b):
+                #     return query["predicate_id"] in a["facts"]
 
-                def compare_fn_object(a, b):
-                    return query["obj_uri"] in a["facts"]
+                # def compare_fn_object(a, b):
+                #     return query["obj_uri"] in a["facts"]
 
-                def compare_fn_subject(a, b):
-                    return query["sub_uri"] in a["facts"]
+                # def compare_fn_subject(a, b):
+                #     return query["sub_uri"] in a["facts"]
 
             if method not in metrics:
                 metrics[method] = []
@@ -225,31 +225,31 @@ def run_random_baseline(samples):
                     "nn_abstracts": abstracts_reranked[:100],
                     "nn_scores": scores_reranked[:100],
                 }
-                if not collapse:
-                    for compare_fn_sub in (
-                        compare_fn_relation,
-                        compare_fn_object,
-                        compare_fn_subject,
-                    ):
-                        precision_sub, recall_sub, rr_sub = evaluate(
-                            query,
-                            current_abstracts,
-                            fact_abstracts,
-                            collapse=collapse,
-                            compare_fn=compare_fn_sub,
-                        )
+                # if not collapse:
+                #     for compare_fn_sub in (
+                #         compare_fn_relation,
+                #         compare_fn_object,
+                #         compare_fn_subject,
+                #     ):
+                #         precision_sub, recall_sub, rr_sub = evaluate(
+                #             query,
+                #             current_abstracts,
+                #             fact_abstracts,
+                #             collapse=collapse,
+                #             compare_fn=compare_fn_sub,
+                #         )
 
-                        current_metrics[
-                            "precision_" + compare_fn_sub.__name__
-                        ] = precision_sub
+                #         current_metrics[
+                #             "precision_" + compare_fn_sub.__name__
+                #         ] = precision_sub
 
-                        current_metrics[
-                            "recall_" + compare_fn_sub.__name__
-                        ] = recall_sub
+                #         current_metrics[
+                #             "recall_" + compare_fn_sub.__name__
+                #         ] = recall_sub
 
-                        current_metrics[
-                            "rr_" + compare_fn_sub.__name__
-                        ] = rr_sub
+                #         current_metrics[
+                #             "rr_" + compare_fn_sub.__name__
+                #         ] = rr_sub
 
                 results.append(current_metrics)
 
@@ -278,16 +278,16 @@ def rerun_baseline(samples):
             else:
 
                 def compare_fn(a, b):
-                    return a["id"] == b["id"]
+                    return a["uuid"] == b["uuid"]
 
-                def compare_fn_relation(a, b):
-                    return query["predicate_id"] in a["facts"]
+                # def compare_fn_relation(a, b):
+                #     return query["predicate_id"] in a["facts"]
 
-                def compare_fn_object(a, b):
-                    return query["obj_uri"] in a["facts"]
+                # def compare_fn_object(a, b):
+                #     return query["obj_uri"] in a["facts"]
 
-                def compare_fn_subject(a, b):
-                    return query["sub_uri"] in a["facts"]
+                # def compare_fn_subject(a, b):
+                #     return query["sub_uri"] in a["facts"]
 
             scores, abstracts = (sample["nn"]["scores"], sample["nn_abstracts"])
 
@@ -332,27 +332,27 @@ def rerun_baseline(samples):
                 "nn_scores": samples[sample_index]["nn"]["scores"][:100],
             }
 
-            if not collapse:
-                for compare_fn_sub in (
-                    compare_fn_relation,
-                    compare_fn_object,
-                    compare_fn_subject,
-                ):
-                    precision_sub, recall_sub, rr_sub = evaluate(
-                        query,
-                        abstracts,
-                        sample["fact_abstracts"],
-                        collapse=collapse,
-                        compare_fn=compare_fn_sub,
-                    )
+            # if not collapse:
+            #     for compare_fn_sub in (
+            #         compare_fn_relation,
+            #         compare_fn_object,
+            #         compare_fn_subject,
+            #     ):
+            #         precision_sub, recall_sub, rr_sub = evaluate(
+            #             query,
+            #             abstracts,
+            #             sample["fact_abstracts"],
+            #             collapse=collapse,
+            #             compare_fn=compare_fn_sub,
+            #         )
 
-                    result[
-                        "precision_" + compare_fn_sub.__name__
-                    ] = precision_sub
+            #         result[
+            #             "precision_" + compare_fn_sub.__name__
+            #         ] = precision_sub
 
-                    result["recall_" + compare_fn_sub.__name__] = recall_sub
+            #         result["recall_" + compare_fn_sub.__name__] = recall_sub
 
-                    result["rr_" + compare_fn_sub.__name__] = rr_sub
+            #         result["rr_" + compare_fn_sub.__name__] = rr_sub
 
             metrics[method].append(result)
 
@@ -363,6 +363,72 @@ def rerun_baseline(samples):
     return metrics
 
 
+def romanToDecimal(input: str) -> str:
+    def value(r):
+        if r == "I":
+            return 1
+        if r == "V":
+            return 5
+        if r == "X":
+            return 10
+        if r == "L":
+            return 50
+        if r == "C":
+            return 100
+        if r == "D":
+            return 500
+        if r == "M":
+            return 1000
+        raise ValueError("Unknown symbol!")
+
+    res = 0
+    i = 0
+
+    while i < len(input):
+        # Getting value of symbol s[i]
+        s1 = value(input[i])
+        if i + 1 < len(input):
+            # Getting value of symbol s[i + 1]
+            s2 = value(input[i + 1])
+            # Comparing both values
+            if s1 >= s2:
+                # Value of current symbol is greater
+                # or equal to the next symbol
+                res = res + s1
+                i = i + 1
+            else:
+                # Value of current symbol is greater
+                # or equal to the next symbol
+                res = res + s2 - s1
+                i = i + 2
+        else:
+            res = res + s1
+            i = i + 1
+
+    return str(res)
+
+
+def equal_fn(
+    answer: str,
+    example: Optional[Mapping[str, Any]] = None,
+    is_target: bool = False,
+) -> str:
+    """Trims extra pedictions and replace numbers with string."""
+    del example
+    del is_target
+    answer = answer.replace("<pad>", "").strip()
+    answer = answer.split("<extra_id_1>")[0].strip()
+    answer = answer.replace("entity", "").replace("-", "").strip()
+    answer = answer.replace("<extra_id_0> ", "")
+
+    if not answer.isnumeric():
+        try:
+            answer = romanToDecimal(answer)
+        except ValueError:
+            pass
+    return answer
+
+
 def get_model_accuracy(model, tokenizer: T5Tokenizer, samples, beam_size=3):
     """Get prediction labels for the given samples"""
     labels = []
@@ -370,7 +436,7 @@ def get_model_accuracy(model, tokenizer: T5Tokenizer, samples, beam_size=3):
         raw_input = sample["example"]["inputs_pretokenized"]
         data = tokenize(tokenizer, sample["example"])
         inputs = data["inputs"]
-        target = trim(sample["example"]["targets_pretokenized"])
+        target = equal_fn(sample["example"]["targets_pretokenized"])
         outputs = model.generate(
             input_ids=inputs.cuda(model.cuda_no),
             num_beams=beam_size,
@@ -378,8 +444,8 @@ def get_model_accuracy(model, tokenizer: T5Tokenizer, samples, beam_size=3):
             max_length=20,
         )
 
-        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        outputs = tuple(map(trim, outputs))
+        outputs = tokenizer.batch_decode(outputs, skip_special_tokens=False)
+        outputs = tuple(map(equal_fn, outputs))
         labels.append(target in outputs)
         if k < 50:
             logging.info(
@@ -401,11 +467,11 @@ def main(_):
     with gzip.open(FLAGS.metrics_file) as handle:
         original_result = pickle.load(handle)
 
-    tokenizer = T5Tokenizer.from_pretrained("google/mt5-base")
+    tokenizer = T5Tokenizer.from_pretrained("google/t5-v1_1-base")
 
     checkpoint_folders = FLAGS.checkpoint_folders.split(",")
 
-    model = MT5ForConditionalGeneration.from_pretrained(
+    model = T5ForConditionalGeneration.from_pretrained(
         checkpoint_folders[-1], local_files_only=True
     ).cuda(FLAGS.gpu)
 
@@ -447,8 +513,9 @@ def main(_):
     else:
         if FLAGS.only_corrects:
 
-            model = MT5ForConditionalGeneration.from_pretrained(
-                checkpoint_folders[0], local_files_only=True
+            model = T5ForConditionalGeneration.from_pretrained(
+                checkpoint_folders[0],
+                local_files_only=True,
             ).cuda(FLAGS.gpu)
             model.eval()
             model.cuda_no = FLAGS.gpu
@@ -472,8 +539,9 @@ def main(_):
             original_result["samples"] = samples
 
         elif FLAGS.only_learned:
-            model = MT5ForConditionalGeneration.from_pretrained(
-                checkpoint_folders[0], local_files_only=True
+            model = T5ForConditionalGeneration.from_pretrained(
+                checkpoint_folders[0],
+                local_files_only=True,
             ).cuda(FLAGS.gpu)
             model.eval()
             model.cuda_no = FLAGS.gpu

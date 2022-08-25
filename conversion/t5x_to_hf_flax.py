@@ -59,6 +59,7 @@ def convert_t5x_checkpoint_to_flax(
     if mode == "params":
         t5x_model_params = t5x_model["target"]
     elif mode == "accums":
+        print("Loading accumulators")
         t5x_model_params = t5x_model["state"]["param_states"]
 
     # Encoder
@@ -418,7 +419,13 @@ if __name__ == "__main__":
         required=True,
         help="Path to the output FLAX model.",
     )
+    parser.add_argument(
+        "--mode", default="params", type=str, help="params vs accums to load"
+    )
     args = parser.parse_args()
     convert_t5x_checkpoint_to_flax(
-        args.t5x_checkpoint_path, args.config_name, args.flax_dump_folder_path
+        args.t5x_checkpoint_path,
+        args.config_name,
+        args.flax_dump_folder_path,
+        mode=args.mode,
     )

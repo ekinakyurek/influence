@@ -8,7 +8,7 @@ import numpy as np
 import torch  # TODO(ekina): make this jax
 from absl import app, flags, logging
 from tqdm import tqdm
-from transformers import AutoTokenizer, MT5ForConditionalGeneration, T5Tokenizer
+from transformers import AutoTokenizer, T5ForConditionalGeneration, T5Tokenizer
 
 
 FLAGS = flags.FLAGS
@@ -186,7 +186,7 @@ def find_entity_indices(
     return (input_positions, target_positions)
 
 
-def get_gradients(model: MT5ForConditionalGeneration, data: Mapping):
+def get_gradients(model: T5ForConditionalGeneration, data: Mapping):
     """Get Mapping[layer, gradient] given input and targets"""
     for param in model.parameters():
         param.grad = None
@@ -212,7 +212,7 @@ def get_gradients(model: MT5ForConditionalGeneration, data: Mapping):
     return grad
 
 
-def get_activations(model: MT5ForConditionalGeneration, data: Mapping):
+def get_activations(model: T5ForConditionalGeneration, data: Mapping):
     """Get Mapping[layer, activation] given input and targets"""
     activations = {}
     with torch.no_grad():
@@ -373,11 +373,11 @@ def main(_, score_fn=get_all_scores):
     with gzip.open(FLAGS.metrics_file, "rb") as handle:
         original_result = pickle.load(handle)
 
-    tokenizer = AutoTokenizer.from_pretrained("google/mt5-base")
+    tokenizer = AutoTokenizer.from_pretrained("google/t5-v1_1-base")
 
     checkpoint_folder = FLAGS.checkpoint_folder
 
-    model = MT5ForConditionalGeneration.from_pretrained(
+    model = T5ForConditionalGeneration.from_pretrained(
         checkpoint_folder, local_files_only=True
     ).cuda(FLAGS.gpu)
 
@@ -385,7 +385,7 @@ def main(_, score_fn=get_all_scores):
 
     if FLAGS.load_accums:
         logging.info("loading accumulators")
-        accum = MT5ForConditionalGeneration.from_pretrained(
+        accum = T5ForConditionalGeneration.from_pretrained(
             checkpoint_folder.replace("_model_", "_accum_"),
             local_files_only=True,
         )

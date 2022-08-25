@@ -2,10 +2,12 @@ import gzip
 import json
 import pickle
 import random
-import datasets
+
+# import datasets
 import numpy as np
 from absl import app, flags, logging
 from tqdm import tqdm
+import src.json_utils as json_utils
 from src.metric_utils import K_EVALS, precision_recall, reciprocal_rank
 
 
@@ -51,12 +53,17 @@ flags.DEFINE_integer("seed", 10, help="Random seed")
 
 
 def main(_):
-    examples = datasets.load_dataset(
-        "data/ftrace", "queries", split="train"
-    ).select(range(15000))
+    random.seed(0)
+    examples = json_utils.load_synth_dataset(
+        "Synth/synth_data_synth_07_27/test.jsonl-00000-of-00001"
+    )
+    random.shuffle(examples)
+    examples = examples[:1000]
 
-    abstracts = datasets.load_dataset("data/ftrace", "abstracts", split="train")
-    ids_to_abstracts_keys = abstracts["id"]
+    abstracts = json_utils.load_synth_dataset(
+        "Synth/synth_data_synth_07_27/train.jsonl-00000-of-00001"
+    )
+    ids_to_abstracts_keys = [d["uuid"] for d in abstracts]
 
     logging.info(f"ids to abstracts length {len(ids_to_abstracts_keys)}")
 
@@ -81,9 +88,10 @@ def main(_):
 
     precisions, recalls, rrs = [], [], []
 
-    np.random.seed(FLAGS.seed)
-    random.seed(FLAGS.seed)
-    indices = np.random.permutation(len(examples)).tolist()
+    # np.random.seed(FLAGS.seed)
+    # random.seed(FLAGS.seed)
+    # indices = np.random.permutation(len(examples)).tolist()
+    indices = np.arange(1000)
     counted = 0
     logging.info("Building targets to abstracts idxs hashmap")
     targets_to_idxs = {}
@@ -99,9 +107,7 @@ def main(_):
         example = examples[index]
         nn_ids = nn["neighbor_ids"]
 
-        fact = ",".join(
-            (example["predicate_id"], example["obj_uri"], example["sub_uri"])
-        )
+        fact = example["uuid"]
 
         fact_ids = list(map(str, fact_to_ids.get(fact, [])))
 
@@ -133,7 +139,7 @@ def main(_):
                     min(200, len(target_idxs)),
                     replace=False,
                 ).tolist()
-                distractors = list(abstracts.select(distractor_idxs))
+                distractors = list(abstracts[distractor_idxs])
             else:
                 target_idxs = targets_to_idxs.get(targets, [])
                 distractor_idxs = np.random.choice(
@@ -141,7 +147,7 @@ def main(_):
                     min(100, len(target_idxs)),
                     replace=False,
                 ).tolist()
-                distractors = list(abstracts.select(distractor_idxs))
+                distractors = list(abstracts[distractor_idxs])
 
                 ext_ids = np.random.choice(
                     ids_to_abstracts_keys, 100, replace=False

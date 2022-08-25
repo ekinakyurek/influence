@@ -455,16 +455,16 @@ def run_all_layer_configs(
                 else:
 
                     def compare_fn(a, b):
-                        return a["id"] == b["id"]
+                        return a["uuid"] == b["uuid"]
 
-                    def compare_fn_relation(a, b):
-                        return query["predicate_id"] in a["facts"]
+                    # def compare_fn_relation(a, b):
+                    #     return query["predicate_id"] in a["facts"]
 
-                    def compare_fn_object(a, b):
-                        return query["obj_uri"] in a["facts"]
+                    # def compare_fn_object(a, b):
+                    #     return query["obj_uri"] in a["facts"]
 
-                    def compare_fn_subject(a, b):
-                        return query["sub_uri"] in a["facts"]
+                    # def compare_fn_subject(a, b):
+                    #     return query["sub_uri"] in a["facts"]
 
                 if method not in result:
                     result[method] = {}
@@ -514,30 +514,31 @@ def run_all_layer_configs(
                         }
 
                         if not is_collapse:
-                            for compare_fn_sub in (
-                                compare_fn_relation,
-                                compare_fn_object,
-                                compare_fn_subject,
-                            ):
-                                precision_sub, recall_sub, rr_sub = evaluate(
-                                    query,
-                                    abstracts_config,
-                                    sample["fact_abstracts"],
-                                    collapse=is_collapse,
-                                    compare_fn=compare_fn_sub,
-                                )
+                            pass
+                            # for compare_fn_sub in (
+                            #     compare_fn_relation,
+                            #     compare_fn_object,
+                            #     compare_fn_subject,
+                            # ):
+                            #     precision_sub, recall_sub, rr_sub = evaluate(
+                            #         query,
+                            #         abstracts_config,
+                            #         sample["fact_abstracts"],
+                            #         collapse=is_collapse,
+                            #         compare_fn=compare_fn_sub,
+                            #     )
 
-                                current_metrics[
-                                    "precision_" + compare_fn_sub.__name__
-                                ] = precision_sub
+                            #     current_metrics[
+                            #         "precision_" + compare_fn_sub.__name__
+                            #     ] = precision_sub
 
-                                current_metrics[
-                                    "recall_" + compare_fn_sub.__name__
-                                ] = recall_sub
+                            #     current_metrics[
+                            #         "recall_" + compare_fn_sub.__name__
+                            #     ] = recall_sub
 
-                                current_metrics[
-                                    "rr_" + compare_fn_sub.__name__
-                                ] = rr_sub
+                            #     current_metrics[
+                            #         "rr_" + compare_fn_sub.__name__
+                            #     ] = rr_sub
 
                         result[method][config_name].append(current_metrics)
 

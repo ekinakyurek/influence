@@ -1,9 +1,12 @@
 import json
-import datasets
+import random
+
+# import datasets
 import numpy as np
 from absl import app, flags, logging
 from rank_bm25 import BM25Plus
 from tqdm import tqdm
+import src.json_utils as json_utils
 
 
 FLAGS = flags.FLAGS
@@ -92,8 +95,11 @@ def get_target_ids(target_ids_hashmap, record):
 def main(_):
     # abstract_dataset = tf.data.TFRecordDataset(FLAGS.abstract_file)
     # abstracts = load_dataset_from_tfrecord(abstract_dataset)
+    abstracts = json_utils.load_synth_dataset(
+        "Synth/synth_data_synth_07_27/train.jsonl-00000-of-00001"
+    )
 
-    abstracts = datasets.load_dataset("data/ftrace", "abstracts", split="train")
+    # abstracts = datasets.load_dataset("data/ftrace", "abstracts", split="train")
 
     logging.info(f"abstracts loaded {len(abstracts)}")
 
@@ -106,9 +112,13 @@ def main(_):
     ]
     bm25 = BM25Plus(corpus)
 
-    test_dataset = datasets.load_dataset(
-        "data/ftrace", "queries", split="train", streaming=True
-    ).take(15000)
+    test_dataset = json_utils.load_synth_dataset(
+        "Synth/synth_data_synth_07_27/test.jsonl-00000-of-00001"
+    )
+
+    random.seed(0)
+    random.shuffle(test_dataset)
+    test_dataset = test_dataset[:1000]
 
     with open(FLAGS.output_file, "w") as f:
         for example in tqdm(test_dataset):
@@ -128,7 +138,7 @@ def main(_):
                 nn_idxs = idxs[np.argsort(-scores[idxs])]
                 nn_scores = scores[nn_idxs].tolist()
 
-            neighbor_ids = abstracts.select(nn_idxs)["id"]
+            neighbor_ids = [a["uuid"] for a in abstracts[nn_idxs]]
 
             line = {"scores": nn_scores, "neighbor_ids": neighbor_ids}
             print(json.dumps(line), file=f)
