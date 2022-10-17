@@ -63,6 +63,11 @@ flags.DEFINE_string(
 
 flags.DEFINE_boolean("disable_tqdm", False, help="Disable tqdm")
 
+
+flags.DEFINE_string(
+    "ckpt_no", default=None, help="ckpt no for single checkpoint experiments"
+)
+
 EPS = 1e-7
 
 
@@ -581,6 +586,14 @@ def main(_):
     samples = metrics["samples"]
 
     score_files = glob.glob(os.path.join(FLAGS.scores_folder, "*.pickle"))
+    if FLAGS.ckpt_no is not None:
+        score_files = [
+            file
+            for file in score_files
+            if f"pytorch_model_{FLAGS.ckpt_no}." in file
+            # if f"checkpoint-{FLAGS.ckpt_no}." in file
+        ]
+
     logging.info(f"score files {repr(score_files)}")
     scores = None
     for score_file in score_files:

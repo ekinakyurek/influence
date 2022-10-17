@@ -75,7 +75,9 @@ def main(_):
         for line in f:
             nns.append(json.loads(line))
 
-    assert len(nns) == len(examples)
+    assert len(nns) == len(
+        examples
+    ), f"nns: {len(nns)}, examples: {len(examples)}"
 
     metrics = {"precision": {}, "recall": {}, "samples": []}
 

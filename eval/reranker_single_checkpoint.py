@@ -9,6 +9,7 @@ import torch  # TODO(ekina): make this jax
 from absl import app, flags, logging
 from tqdm import tqdm
 from transformers import AutoTokenizer, MT5ForConditionalGeneration, T5Tokenizer
+from src import hf_optimizer_load
 
 
 FLAGS = flags.FLAGS
@@ -376,14 +377,21 @@ def main(_, score_fn=get_all_scores):
     tokenizer = AutoTokenizer.from_pretrained("google/mt5-base")
 
     checkpoint_folder = FLAGS.checkpoint_folder
-
-    model = MT5ForConditionalGeneration.from_pretrained(
-        checkpoint_folder, local_files_only=True
-    ).cuda(FLAGS.gpu)
-
     checkpoint_name = pathlib.PurePath(checkpoint_folder).name
 
-    if FLAGS.load_accums:
+    if not FLAGS.load_accums:
+        model = MT5ForConditionalGeneration.from_pretrained(
+            checkpoint_folder, local_files_only=True
+        ).cuda(FLAGS.gpu)
+    elif FLAGS.load_accums and "finetune" in checkpoint_folder:
+        logging.info("loading accumulators")
+        model = hf_optimizer_load.load_model_with_accum(
+            checkpoint_folder, FLAGS.gpu
+        )
+    else:
+        model = MT5ForConditionalGeneration.from_pretrained(
+            checkpoint_folder, local_files_only=True
+        ).cuda(FLAGS.gpu)
         logging.info("loading accumulators")
         accum = MT5ForConditionalGeneration.from_pretrained(
             checkpoint_folder.replace("_model_", "_accum_"),

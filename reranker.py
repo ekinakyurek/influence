@@ -70,13 +70,23 @@ flags.DEFINE_string(
     help="name for exp folder to load the splits from",
 )
 
-flags.DEFINE_string("eval_stage", default="True", help="eval stage")
+flags.DEFINE_string(
+    "ckpt_score_prefix",
+    default=None,
+    help="where to load ckpt score prefix, used only when nockpt_stage ",
+)
 
-flags.DEFINE_string("pre_stage", default="True", help="pre stage")
+flags.DEFINE_string(
+    "ckpt_no", default=None, help="ckpt no; used on single ckpt experiments"
+)
 
-flags.DEFINE_string("ckpt_stage", default="True", help="ckpt stage")
+flags.DEFINE_bool("eval_stage", default=True, help="eval stage")
 
-flags.DEFINE_string("post_stage", default="True", help="post stage")
+flags.DEFINE_bool("pre_stage", default=True, help="pre stage")
+
+flags.DEFINE_bool("ckpt_stage", default=True, help="ckpt stage")
+
+flags.DEFINE_bool("post_stage", default=True, help="post stage")
 
 flags.DEFINE_string("gpus_to_use", default=None, help="coma seperated gpu ids")
 
@@ -133,6 +143,7 @@ def main(_):
             "Running baseline evaluations..."
             f"Metrics will be outputted to {FLAGS.baseline_metrics_file}"
         )
+        logging.info(f"RUN: {evaluate_cmd}")
 
         subprocess.run(evaluate_cmd, shell=True, check=True)
 
@@ -150,7 +161,7 @@ def main(_):
 
         output_metric_folder = os.path.join(exp_folder, f"seed_{i}")
 
-        for subset in ("learned", "random"):
+        for subset in ("learned",):
             os.makedirs(output_metric_folder, exist_ok=True)
             baseline_prefix = os.path.join(output_metric_folder, f"{subset}/")
             os.makedirs(baseline_prefix, exist_ok=True)
@@ -195,8 +206,11 @@ def main(_):
                 logging.info(f"RUN: {pre_cmd}")
                 subprocess.run(gpu_header + header_cmd + pre_cmd, shell=True)
 
-            for eos in ("no_eos", "eos"):
-                for accum in ("accum", "no_accum"):
+            for eos in (
+                "no_eos",
+                # "eos",
+            ):
+                for accum in ("accum",):
 
                     if FLAGS.load_exp_folder is None:
                         ckpt_prefix = os.path.join(
@@ -270,6 +284,15 @@ def main(_):
                                 gpu_header + header_cmd + ckpt_cmd, shell=True
                             )
                             time.sleep(10)
+                    else:
+                        if FLAGS.ckpt_score_prefix is not None:
+                            ckpt_scores_prefix = os.path.join(
+                                FLAGS.ckpt_score_prefix,
+                                f"seed_{i}",
+                                subset,
+                                f"{eos}_{accum}/",
+                                "scores",
+                            )
 
                     if FLAGS.post_stage:
                         wait_for_files(files_to_check)
@@ -280,6 +303,9 @@ def main(_):
                             f" --output_metrics_file={ckpt_prefix}/results_detailed"
                             " --disable_tqdm "
                         )
+
+                        if FLAGS.ckpt_no is not None:
+                            post_params += f" --ckpt_no {FLAGS.ckpt_no} "
 
                         post_cmd = (
                             f"python -u eval/reranker_post.py {post_params} >"
