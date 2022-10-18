@@ -18,7 +18,9 @@ python reranker.py \
     --baseline_nn_file ${nn_output_file} \
     --data_root ${data_root} \
     --fact_to_ids_file ${fact_to_ids_file} \
-    --gpus_to_use 12,13,14,15 \
+    --gpus_to_use 11,12,13,15 \
+    --noeval_stage \
+    --nopre_stage \
     --exp_folder ${exp_folder} >${exp_folder}/.log5.txt 2>${exp_folder}/.err5.txt
 
 # exp_folder_ft=LAMA/data/metrics/reranker/sweep_v2_ft/

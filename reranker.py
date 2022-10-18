@@ -70,13 +70,13 @@ flags.DEFINE_string(
     help="name for exp folder to load the splits from",
 )
 
-flags.DEFINE_string("eval_stage", default="True", help="eval stage")
+flags.DEFINE_bool("eval_stage", default=True, help="eval stage")
 
-flags.DEFINE_string("pre_stage", default="True", help="pre stage")
+flags.DEFINE_bool("pre_stage", default=True, help="pre stage")
 
-flags.DEFINE_string("ckpt_stage", default="True", help="ckpt stage")
+flags.DEFINE_bool("ckpt_stage", default=True, help="ckpt stage")
 
-flags.DEFINE_string("post_stage", default="True", help="post stage")
+flags.DEFINE_bool("post_stage", default=True, help="post stage")
 
 flags.DEFINE_string("gpus_to_use", default=None, help="coma seperated gpu ids")
 
@@ -141,8 +141,7 @@ def main(_):
         " PYTHONHASHSEED=0;"
     )
 
-    for i in range(3):
-
+    for i in range(1, 2):
         if FLAGS.load_exp_folder is None:
             exp_folder = FLAGS.exp_folder
         else:
@@ -150,7 +149,7 @@ def main(_):
 
         output_metric_folder = os.path.join(exp_folder, f"seed_{i}")
 
-        for subset in ("learned", "random"):
+        for subset in ("learned",):
             os.makedirs(output_metric_folder, exist_ok=True)
             baseline_prefix = os.path.join(output_metric_folder, f"{subset}/")
             os.makedirs(baseline_prefix, exist_ok=True)
@@ -195,8 +194,8 @@ def main(_):
                 logging.info(f"RUN: {pre_cmd}")
                 subprocess.run(gpu_header + header_cmd + pre_cmd, shell=True)
 
-            for eos in ("no_eos", "eos"):
-                for accum in ("accum", "no_accum"):
+            for eos in ("eos",):
+                for accum in ("accum",):
 
                     if FLAGS.load_exp_folder is None:
                         ckpt_prefix = os.path.join(
