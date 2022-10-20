@@ -63,7 +63,6 @@ target/
 .DS_Store
 
 pre-trained_language_models/
-src/
 .idea
 */.mypy_cache
 LAMA-Internal/
