@@ -363,7 +363,9 @@ def rerun_baseline(samples):
     return metrics
 
 
-def get_model_accuracy(model, tokenizer: T5Tokenizer, samples, beam_size=3):
+def get_model_accuracy(
+    model, tokenizer: T5Tokenizer, samples, beam_size=3, topk=3
+):
     """Get prediction labels for the given samples"""
     labels = []
     for k, sample in enumerate(tqdm(samples, disable=FLAGS.disable_tqdm)):
@@ -374,7 +376,7 @@ def get_model_accuracy(model, tokenizer: T5Tokenizer, samples, beam_size=3):
         outputs = model.generate(
             input_ids=inputs.cuda(model.cuda_no),
             num_beams=beam_size,
-            num_return_sequences=3,
+            num_return_sequences=topk,
             max_length=20,
         )
 
@@ -424,6 +426,7 @@ def main(_):
         tokenizer,
         samples,
         beam_size=FLAGS.beam_size,
+        topk=1,
     )
 
     logging.info(f"Mean accuracy of last checkpoint is {np.mean(labels)}")
@@ -479,7 +482,7 @@ def main(_):
             model.cuda_no = FLAGS.gpu
 
             labels_zero = get_model_accuracy(
-                model, tokenizer, samples, beam_size=FLAGS.beam_size
+                model, tokenizer, samples, beam_size=FLAGS.beam_size, topk=3
             )
 
             samples = [

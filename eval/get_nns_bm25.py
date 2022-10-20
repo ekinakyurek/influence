@@ -108,7 +108,7 @@ def main(_):
 
     test_dataset = datasets.load_dataset(
         "data/ftrace", "queries", split="train", streaming=True
-    ).take(15000)
+    ).take(10000)
 
     with open(FLAGS.output_file, "w") as f:
         for example in tqdm(test_dataset):
